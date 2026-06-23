@@ -357,14 +357,27 @@ const CONFIG = {
   ]
 };
 
-/* Weapon presets — visual identity only (shapes now, sprites later, no engine change). */
+/* Weapon presets. `kind` selects the behavior class:
+   - melee : tethered tip, circle-vs-capsule hits (the original weapons)
+   - ranged: fires projectiles at the nearest enemy (optionally a CC `effect`)
+   - aura  : periodically drops a lingering ground zone (poison)
+   `effect` = on-hit / zone crowd control: freeze (slow), burn (DoT), poison (DoT). */
 const WEAPONS = {
-  hammer: { label: "Hammer", shape: "hammer" },
-  blade:  { label: "Blade",  shape: "blade"  },
-  spike:  { label: "Spike",  shape: "spike"  },
-  flail:  { label: "Flail",  shape: "ball"   },
-  axe:    { label: "Axe",    shape: "axe"    }
+  hammer: { label: "Hammer",                shape: "hammer", kind: "melee" },
+  blade:  { label: "Blade",                 shape: "blade",  kind: "melee" },
+  spike:  { label: "Spike",                 shape: "spike",  kind: "melee" },
+  flail:  { label: "Flail",                 shape: "ball",   kind: "melee" },
+  axe:    { label: "Axe",                   shape: "axe",    kind: "melee" },
+  bow:    { label: "Bow (ranged)",          shape: "bow",    kind: "ranged", effect: "none",   proj: "arrow" },
+  frost:  { label: "Frost Staff (freeze)",  shape: "staff",  kind: "ranged", effect: "freeze", proj: "frost" },
+  fire:   { label: "Fire Staff (burn)",     shape: "staff",  kind: "ranged", effect: "burn",   proj: "fire"  },
+  poison: { label: "Poison Censer (area)",  shape: "orb",    kind: "aura",   effect: "poison" }
 };
+/* defaults for the new weapon params, used when a melee weapon is switched to a
+   ranged/aura type that didn't carry them. */
+const WDEF = { fireRate: 70, projectileSpeed: 8, effectPower: 8, effectDuration: 120, zoneRadius: 75 };
+const wp = (w, k) => (w[k] != null ? w[k] : WDEF[k]);
+const weaponKind = (w) => (WEAPONS[w.type] && WEAPONS[w.type].kind) || "melee";
 
 /* ---------------------------------------------------------------------------
    Seeded PRNG — mulberry32. Iron rule: the sim only ever pulls from here.
@@ -396,6 +409,8 @@ let state = {
   shake: 0,
   fighters: [],     // runtime fighters (pos/vel/hp/weapon tip/totals)
   particles: [],
+  projectiles: [],  // ranged weapon shots
+  zones: [],        // area effects (poison pools, fire patches)
   floaters: []      // floating damage numbers
 };
 
@@ -431,7 +446,12 @@ function initFighters() {
       prevX: px, prevY: py,            // render-interpolation snapshots (last sim state)
       prevWX: px, prevWY: py,
       spin: ang,                       // weapon angle (used by "spin" motion mode)
+      aim: ang,                        // aim angle (used by ranged/aura weapons)
       hitCooldown: [],                 // per-opponent contact latch
+      fireCd: Math.floor(rand(10, 45)),// staggered first shot so they don't all fire frame 1
+      slowTimer: 0, slowFactor: 1,     // freeze / slow CC
+      burnTimer: 0, burnDps: 0, burnOwner: null, // burn DoT
+      poisonGlow: 0,                   // cosmetic tint while standing in poison
       flash: 0,                        // white hit-flash timer
       trail: [],
       totalDamage: 0,
@@ -465,6 +485,8 @@ function startMatch() {
     state.winner = null;
     state.frame = 0;
     state.particles = [];
+    state.projectiles = [];
+    state.zones = [];
     state.floaters = [];
     initFighters();
   }
@@ -479,6 +501,8 @@ function resetMatch() {
   state.frame = 0;
   state.shake = 0;
   state.particles = [];
+  state.projectiles = [];
+  state.zones = [];
   state.floaters = [];
   initFighters();
   updateButtons();
@@ -522,7 +546,10 @@ function stepFighter(rf) {
   rf.vx *= P.friction;
   rf.vy *= P.friction;
   clampSpeed(rf, P.maxSpeed);
-  if (P.minSpeed > 0) {
+  // freeze / slow CC overrides the min-speed floor so a frozen fighter actually stalls
+  let frozen = false;
+  if (rf.slowTimer > 0) { rf.vx *= rf.slowFactor; rf.vy *= rf.slowFactor; rf.slowTimer--; frozen = true; }
+  if (!frozen && P.minSpeed > 0) {
     let sp = Math.hypot(rf.vx, rf.vy);
     if (sp < P.minSpeed) {
       if (sp < 0.001) { rf.vx = rand(-1, 1); rf.vy = rand(-1, 1); } // seeded nudge if dead-stopped
@@ -540,11 +567,16 @@ function stepFighter(rf) {
   if (rf.y < top)    { rf.y = top;    rf.vy = Math.abs(rf.vy) * A.restitution; }
   if (rf.y > bottom) { rf.y = bottom; rf.vy = -Math.abs(rf.vy) * A.restitution; }
 
-  // 4. weapon tip. Two motion modes (per-weapon toggle):
-  //    "flail" — a tethered Verlet mass that trails/swings as the body moves & bounces.
-  //    "spin"  — rotates around the body at a constant angular speed.
+  // 4. weapon tip. Melee weapons swing ("flail"/"spin"); ranged & aura weapons
+  //    instead aim the held weapon toward the nearest enemy.
   const len = fc.weapon.length + r;
-  if (fc.weapon.motion === "spin") {
+  if (weaponKind(fc.weapon) !== "melee") {
+    const tgt = nearestEnemy(rf);
+    if (tgt) rf.aim = Math.atan2(tgt.y - rf.y, tgt.x - rf.x);
+    rf.wpx = rf.wx; rf.wpy = rf.wy;
+    rf.wx = rf.x + Math.cos(rf.aim) * len;
+    rf.wy = rf.y + Math.sin(rf.aim) * len;
+  } else if (fc.weapon.motion === "spin") {
     rf.spin += (fc.weapon.spinSpeed || 0.12);
     rf.wpx = rf.wx; rf.wpy = rf.wy;            // keep prev synced so toggling back to flail won't jolt
     rf.wx = rf.x + Math.cos(rf.spin) * len;
@@ -570,6 +602,10 @@ function stepFighter(rf) {
     // keep spin angle tracking the tether so a later switch to "spin" is seamless
     rf.spin = Math.atan2(rf.wy - rf.y, rf.wx - rf.x);
   }
+
+  // burn damage-over-time (from a fire staff hit)
+  if (rf.burnTimer > 0) { dealDamage(rf.burnOwner, rf, rf.burnDps / 60); rf.burnTimer--; }
+  if (rf.poisonGlow > 0) rf.poisonGlow--;
 
   // trail history for the glow streak
   rf.trail.push({ x: rf.x, y: rf.y });
@@ -629,6 +665,7 @@ function handleCombat() {
       const aCfg = CONFIG.fighters[atk.cfg];
       const dCfg = CONFIG.fighters[def.cfg];
       const w = aCfg.weapon;
+      if (weaponKind(w) !== "melee") continue;   // ranged/aura weapons hit via projectiles/zones
 
       // capsule = segment from attacker center to weapon tip, radius = weapon.width/2
       const cp = closestOnSeg(def.x, def.y, atk.x, atk.y, atk.wx, atk.wy);
@@ -648,13 +685,25 @@ function handleCombat() {
   }
 }
 
+/* Central HP subtraction + death check. attacker may be null (e.g. untracked DoT). */
+function dealDamage(attacker, target, amount) {
+  if (!target.alive || amount <= 0) return;
+  target.hp -= amount;
+  target.flash = Math.max(target.flash, 6);
+  if (attacker) {
+    attacker.totalDamage += amount;
+    attacker.hitsLanded++;
+  }
+  if (CONFIG.match.winOnZero && target.hp <= 0) {
+    target.hp = 0;
+    target.alive = false;
+    declareWinner();
+  }
+}
+
 function applyHit(atk, def, w, dx, dy, dist) {
   const P = CONFIG.physics;
-  // damage
-  def.hp -= w.damage;
-  atk.totalDamage += w.damage;
-  atk.hitsLanded++;
-  def.flash = 8;
+  dealDamage(atk, def, w.damage);
 
   // self-heal, capped at startHP
   if (w.heal) {
@@ -675,13 +724,6 @@ function applyHit(atk, def, w, dx, dy, dist) {
   spawnFloater(def.x, def.y - CONFIG.fighters[def.cfg].radius - 10, "-" + w.damage, "#ff5d6c");
   if (w.heal) spawnFloater(atk.x, atk.y - CONFIG.fighters[atk.cfg].radius - 10, "+" + w.heal, "#46e6a0");
   state.shake = Math.min(16, state.shake + Math.min(10, w.knockback / 900));
-
-  // death check
-  if (CONFIG.match.winOnZero && def.hp <= 0) {
-    def.hp = 0;
-    def.alive = false;
-    declareWinner();
-  }
 }
 
 function declareWinner() {
@@ -699,6 +741,140 @@ function declareWinner() {
     }
     updateButtons();
   }
+}
+
+/* ---------------------------------------------------------------------------
+   Ranged weapons (projectiles) + crowd-control effects (freeze / burn / poison)
+   --------------------------------------------------------------------------- */
+const EFFECT_COLOR = { none: "#dfe6ff", freeze: "#7fd8ff", burn: "#ff7a2a", poison: "#86e05a" };
+
+function nearestEnemy(rf) {
+  let best = null, bestD = Infinity;
+  for (const o of state.fighters) {
+    if (o === rf || !o.alive) continue;
+    const d = (o.x - rf.x) ** 2 + (o.y - rf.y) ** 2;
+    if (d < bestD) { bestD = d; best = o; }
+  }
+  return best;
+}
+
+/* Each ranged fighter fires at its cadence toward the nearest enemy; aura
+   fighters drop a zone under themselves. Cooldowns count down in fixed steps so
+   firing is deterministic. */
+function fireWeapons() {
+  for (const rf of state.fighters) {
+    if (!rf.alive) continue;
+    const w = CONFIG.fighters[rf.cfg].weapon;
+    const kind = weaponKind(w);
+    if (kind === "melee") continue;
+    if (rf.fireCd > 0) { rf.fireCd--; continue; }
+
+    if (kind === "ranged") {
+      const tgt = nearestEnemy(rf);
+      if (!tgt) { rf.fireCd = 10; continue; }
+      spawnProjectile(rf, tgt, w);
+      rf.fireCd = Math.max(8, Math.round(wp(w, "fireRate")));
+    } else { // aura → poison pool
+      spawnZone(rf, rf.x, rf.y, w, "poison");
+      rf.fireCd = Math.max(20, Math.round(wp(w, "fireRate")));
+    }
+  }
+}
+
+function spawnProjectile(rf, tgt, w) {
+  const def = WEAPONS[w.type];
+  const speed = wp(w, "projectileSpeed");
+  // lead-free aim at the target's current center, with a tiny seeded spread
+  const ang = Math.atan2(tgt.y - rf.y, tgt.x - rf.x) + rand(-0.04, 0.04);
+  state.projectiles.push({
+    owner: rf,
+    x: rf.wx, y: rf.wy, prevX: rf.wx, prevY: rf.wy,
+    vx: Math.cos(ang) * speed, vy: Math.sin(ang) * speed,
+    damage: w.damage,
+    knockback: w.knockback,
+    effect: def.effect || "none",
+    power: wp(w, "effectPower"),
+    duration: wp(w, "effectDuration"),
+    zoneRadius: wp(w, "zoneRadius"),
+    color: CONFIG.fighters[rf.cfg].color,
+    visual: def.proj || "arrow",
+    radius: Math.max(4, w.width * 0.3),
+    life: 200
+  });
+}
+
+function updateProjectiles() {
+  const A = CONFIG.arena, P = CONFIG.physics;
+  const keep = [];
+  for (const p of state.projectiles) {
+    p.prevX = p.x; p.prevY = p.y;
+    p.x += p.vx; p.y += p.vy; p.life--;
+    let dead = p.life <= 0 || p.x < 0 || p.y < 0 || p.x > A.width || p.y > A.height;
+
+    if (!dead) {
+      for (const t of state.fighters) {
+        if (t === p.owner || !t.alive) continue;
+        const tr = CONFIG.fighters[t.cfg].radius;
+        if ((t.x - p.x) ** 2 + (t.y - p.y) ** 2 <= (tr + p.radius) ** 2) {
+          dealDamage(p.owner, t, p.damage);
+          const d = Math.hypot(p.vx, p.vy) || 1;
+          const kb = p.knockback * P.knockbackScale * (1 / 60);
+          t.vx += (p.vx / d) * kb; t.vy += (p.vy / d) * kb;
+          p.owner.totalKnockback += p.knockback * P.knockbackScale;
+          applyEffect(p, t);
+          spawnBurst(p.x, p.y, EFFECT_COLOR[p.effect] || p.color);
+          spawnFloater(t.x, t.y - tr - 10, "-" + p.damage, "#ff5d6c");
+          state.shake = Math.min(12, state.shake + 3);
+          dead = true;
+          break;
+        }
+      }
+    }
+    if (!dead) keep.push(p);
+  }
+  state.projectiles = keep;
+}
+
+/* on-hit crowd control */
+function applyEffect(p, target) {
+  if (p.effect === "freeze") {
+    target.slowTimer = Math.max(target.slowTimer, p.duration);
+    target.slowFactor = 0.25;
+    spawnFloater(target.x, target.y - 26, "FROZEN", EFFECT_COLOR.freeze);
+  } else if (p.effect === "burn") {
+    target.burnTimer = Math.max(target.burnTimer, p.duration);
+    target.burnDps = p.power;
+    target.burnOwner = p.owner;
+    spawnZone(p.owner, p.x, p.y, null, "burn", p);   // burning patch on the ground
+  }
+}
+
+function spawnZone(rf, x, y, w, effect, src) {
+  state.zones.push({
+    owner: rf, x, y, effect,
+    radius: w ? wp(w, "zoneRadius") : (src ? src.zoneRadius : WDEF.zoneRadius),
+    dps: w ? wp(w, "effectPower") : (src ? src.power : WDEF.effectPower),
+    life: w ? wp(w, "effectDuration") : (src ? src.duration : WDEF.effectDuration),
+    maxLife: w ? wp(w, "effectDuration") : (src ? src.duration : WDEF.effectDuration),
+    color: EFFECT_COLOR[effect] || "#86e05a"
+  });
+}
+
+function updateZones() {
+  const keep = [];
+  for (const z of state.zones) {
+    z.life--;
+    for (const t of state.fighters) {
+      if (t === z.owner || !t.alive) continue;
+      const tr = CONFIG.fighters[t.cfg].radius;
+      if ((t.x - z.x) ** 2 + (t.y - z.y) ** 2 <= (z.radius + tr) ** 2) {
+        dealDamage(z.owner, t, z.dps / 60);   // continuous DoT
+        if (z.effect === "poison") t.poisonGlow = 6;
+      }
+    }
+    if (z.life > 0) keep.push(z);
+  }
+  state.zones = keep;
 }
 
 /* ---------------------------------------------------------------------------
@@ -758,11 +934,13 @@ function drawFrame(alpha) {
   drawBackground(A);
   drawWalls(A);
 
+  drawZones();   // ground effects sit under the fighters
   // trails first (under everything)
   for (const rf of state.fighters) drawTrail(rf);
   for (const rf of state.fighters) drawWeapon(rf);
   for (const rf of state.fighters) drawCircle(rf);
 
+  drawProjectiles(a);
   drawParticles();
   drawFloaters();
 
@@ -860,6 +1038,20 @@ function drawWeapon(rf) {
     ctx.beginPath();
     ctx.arc(0, 0, s*0.9, -Math.PI*0.6, Math.PI*0.6);
     ctx.lineTo(0,0); ctx.closePath(); ctx.fill(); ctx.stroke();
+  } else if (shape === "bow") {
+    ctx.lineWidth = 3; ctx.strokeStyle = col;
+    ctx.beginPath(); ctx.arc(0, 0, s*0.9, -Math.PI*0.55, Math.PI*0.55); ctx.stroke();
+    ctx.strokeStyle = "rgba(255,255,255,0.7)"; ctx.lineWidth = 1.5;
+    const yb = Math.sin(Math.PI*0.55) * s*0.9;
+    ctx.beginPath(); ctx.moveTo(Math.cos(Math.PI*0.55)*s*0.9, -yb); ctx.lineTo(Math.cos(Math.PI*0.55)*s*0.9, yb); ctx.stroke();
+  } else if (shape === "staff") {
+    // glowing orb on the end of the staff
+    ctx.beginPath(); ctx.arc(0, 0, s*0.55, 0, Math.PI*2); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = "rgba(255,255,255,0.85)";
+    ctx.beginPath(); ctx.arc(0, 0, s*0.25, 0, Math.PI*2); ctx.fill();
+  } else if (shape === "orb") {
+    // censer orb
+    ctx.beginPath(); ctx.arc(0, 0, s*0.6, 0, Math.PI*2); ctx.fill(); ctx.stroke();
   } else { // ball / flail
     ctx.beginPath(); ctx.arc(0, 0, s*0.7, 0, Math.PI*2); ctx.fill(); ctx.stroke();
   }
@@ -890,12 +1082,32 @@ function drawCircle(rf) {
     ctx.fillStyle = "rgba(255,255,255," + (rf.flash / 8 * 0.7) + ")";
     ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill();
   }
+  // status tints: freeze (icy overlay), poison (green wash)
+  if (rf.slowTimer > 0) {
+    ctx.fillStyle = "rgba(127,216,255,0.35)";
+    ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill();
+  }
+  if (rf.poisonGlow > 0) {
+    ctx.fillStyle = "rgba(134,224,90,0.28)";
+    ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill();
+  }
   ctx.shadowBlur = 0;
 
   // rim
   ctx.lineWidth = 3;
   ctx.strokeStyle = "rgba(255,255,255,0.5)";
   ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke();
+
+  // status ring: frozen = cyan, burning = flickering orange
+  if (rf.slowTimer > 0 || rf.burnTimer > 0) {
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = rf.burnTimer > 0
+      ? `rgba(255,${120 + Math.floor(Math.random() * 80)},40,0.9)`
+      : "rgba(127,216,255,0.95)";
+    ctx.shadowColor = ctx.strokeStyle; ctx.shadowBlur = 12;
+    ctx.beginPath(); ctx.arc(cx, cy, r + 4, 0, Math.PI * 2); ctx.stroke();
+    ctx.shadowBlur = 0;
+  }
   ctx.restore();
 
   // HP bar above the circle
@@ -938,6 +1150,51 @@ function drawHPBar(rf, fc, r) {
   ctx.fillStyle = "rgba(255,210,120,0.95)";
   ctx.font = "600 10px Segoe UI, sans-serif";
   ctx.fillText(`⚔ ${fc.weapon.damage}`, rf.dx, by + bh + 12);
+}
+
+function drawZones() {
+  for (const z of state.zones) {
+    const t = Math.max(0, z.life / z.maxLife);
+    const pulse = 0.5 + 0.5 * Math.sin(state.frame * 0.12);
+    const c = hexToRgb(z.color);
+    const g = ctx.createRadialGradient(z.x, z.y, z.radius * 0.2, z.x, z.y, z.radius);
+    g.addColorStop(0, `rgba(${c.r},${c.g},${c.b},${0.30 * t})`);
+    g.addColorStop(1, `rgba(${c.r},${c.g},${c.b},0)`);
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(z.x, z.y, z.radius, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = `rgba(${c.r},${c.g},${c.b},${(0.25 + 0.25 * pulse) * t})`;
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(z.x, z.y, z.radius * (0.7 + 0.3 * pulse), 0, Math.PI * 2); ctx.stroke();
+  }
+}
+
+function drawProjectiles(a) {
+  for (const p of state.projectiles) {
+    const x = p.prevX + (p.x - p.prevX) * a;
+    const y = p.prevY + (p.y - p.prevY) * a;
+    const ang = Math.atan2(p.vy, p.vx);
+    const col = EFFECT_COLOR[p.effect] || p.color;
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(ang);
+    ctx.shadowColor = col; ctx.shadowBlur = 12;
+    ctx.fillStyle = col; ctx.strokeStyle = "rgba(255,255,255,0.85)";
+    if (p.visual === "arrow") {
+      ctx.lineWidth = 2.5; ctx.strokeStyle = col;
+      ctx.beginPath(); ctx.moveTo(-9, 0); ctx.lineTo(7, 0); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(7, 0); ctx.lineTo(2, -3); ctx.lineTo(2, 3); ctx.closePath(); ctx.fill();
+    } else if (p.visual === "frost") {
+      ctx.beginPath();
+      ctx.moveTo(p.radius + 2, 0); ctx.lineTo(0, p.radius); ctx.lineTo(-p.radius - 2, 0); ctx.lineTo(0, -p.radius);
+      ctx.closePath(); ctx.fill(); ctx.stroke();
+    } else { // fire
+      ctx.beginPath(); ctx.arc(0, 0, p.radius, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "rgba(255,230,120,0.9)";
+      ctx.beginPath(); ctx.arc(0, 0, p.radius * 0.5, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.restore();
+  }
+  ctx.shadowBlur = 0;
 }
 
 function drawParticles() {
@@ -1051,7 +1308,11 @@ function loop(now) {
       for (const rf of state.fighters) if (rf.alive) stepFighter(rf);
       resolveBodies();
       handleCombat();
+      fireWeapons();
+      updateProjectiles();
+      updateZones();
       _acc -= SIM_STEP_MS;
+      if (!state.running) break;   // a KO this step ends the match; don't over-step
     }
   }
   stepEffects();
@@ -1067,11 +1328,17 @@ function updateReadout() {
   let html = "";
   state.fighters.forEach((rf) => {
     const fc = CONFIG.fighters[rf.cfg];
+    let status = "";
+    if (rf.alive) {
+      if (rf.slowTimer > 0) status += " ❄";
+      if (rf.burnTimer > 0) status += " 🔥";
+      if (rf.poisonGlow > 0) status += " ☠";
+    }
     html += `
       <div class="stat-card">
-        <h3><span class="swatch" style="color:${fc.color};background:${fc.color}"></span>${escapeHtml(fc.name)} ${rf.alive ? "" : "💀"}</h3>
+        <h3><span class="swatch" style="color:${fc.color};background:${fc.color}"></span>${escapeHtml(fc.name)} ${rf.alive ? status : "💀"}</h3>
         <div class="stat-row"><span>HP</span><b>${Math.ceil(rf.hp)} / ${CONFIG.match.startHP}</b></div>
-        <div class="stat-row"><span>Weapon dmg</span><b>${fc.weapon.damage}</b></div>
+        <div class="stat-row"><span>Weapon</span><b>${(WEAPONS[fc.weapon.type]||{}).label||fc.weapon.type}</b></div>
         <div class="stat-row"><span>Total damage</span><b>${rf.totalDamage}</b></div>
         <div class="stat-row"><span>Hits landed</span><b>${rf.hitsLanded}</b></div>
         <div class="stat-row"><span>Total knockback</span><b>${Math.round(rf.totalKnockback)}</b></div>
@@ -1183,7 +1450,7 @@ function buildMatch() {
 
 const FIGHTER_MAX = 8;
 const FIGHTER_COLORS = ["#f5d020", "#33cc33", "#ff6ec7", "#6ea8ff", "#ff7043", "#b388ff", "#26c6da", "#ff5d6c"];
-const FIGHTER_WEAPONS = ["hammer", "blade", "spike", "flail", "axe"];
+const FIGHTER_WEAPONS = ["hammer", "blade", "bow", "frost", "fire", "poison", "spike", "axe"];
 
 function buildFighters() {
   // Add-fighter control + live count (free-for-all: last circle standing wins)
@@ -1252,7 +1519,7 @@ function buildFighters() {
     slider(card, { label: "Radius", min: 14, max: 70, step: 1,
       get: () => f.radius, set: v => f.radius = v, fmt: v => v + "px" });
 
-    // weapon type dropdown
+    // weapon type dropdown — switching kind re-renders the card's relevant fields
     field(card, "Weapon type", () => {
       const sel = document.createElement("select");
       Object.keys(WEAPONS).forEach(k => {
@@ -1261,36 +1528,66 @@ function buildFighters() {
         if (f.weapon.type === k) o.selected = true;
         sel.appendChild(o);
       });
-      sel.addEventListener("change", () => f.weapon.type = sel.value);
+      sel.addEventListener("change", () => { f.weapon.type = sel.value; buildFighters(); });
       return sel;
     });
 
-    // weapon motion mode: follow direction (flail) vs constant spin
-    field(card, "Weapon motion", () => {
-      const sel = document.createElement("select");
-      [["flail", "Flail (follow direction)"], ["spin", "Spin (constant)"]].forEach(([v, label]) => {
-        const o = document.createElement("option");
-        o.value = v; o.textContent = label;
-        if ((f.weapon.motion || "flail") === v) o.selected = true;
-        sel.appendChild(o);
+    const w = f.weapon;
+    const kind = weaponKind(w);
+    const effect = (WEAPONS[w.type] || {}).effect || "none";
+
+    // damage applies to every weapon class
+    slider(card, { label: kind === "aura" ? "Damage / sec" : "Damage", min: 0, max: 60, step: 1,
+      get: () => w.damage, set: v => w.damage = v });
+
+    if (kind === "melee") {
+      field(card, "Weapon motion", () => {
+        const sel = document.createElement("select");
+        [["flail", "Flail (follow direction)"], ["spin", "Spin (constant)"]].forEach(([v, label]) => {
+          const o = document.createElement("option");
+          o.value = v; o.textContent = label;
+          if ((w.motion || "flail") === v) o.selected = true;
+          sel.appendChild(o);
+        });
+        sel.addEventListener("change", () => w.motion = sel.value);
+        return sel;
       });
-      sel.addEventListener("change", () => f.weapon.motion = sel.value);
-      return sel;
-    });
-    slider(card, { label: "Spin speed", min: 0, max: 0.5, step: 0.01,
-      get: () => f.weapon.spinSpeed ?? 0.12, set: v => f.weapon.spinSpeed = v, fmt: v => v.toFixed(2) });
-
-    // weapon stats (live)
-    slider(card, { label: "Damage", min: 0, max: 60, step: 1,
-      get: () => f.weapon.damage, set: v => f.weapon.damage = v });
-    slider(card, { label: "Heal on hit", min: 0, max: 40, step: 1,
-      get: () => f.weapon.heal, set: v => f.weapon.heal = v });
-    slider(card, { label: "Knockback", min: 0, max: 15000, step: 100,
-      get: () => f.weapon.knockback, set: v => f.weapon.knockback = v });
-    slider(card, { label: "Reach (length)", min: 20, max: 160, step: 5,
-      get: () => f.weapon.length, set: v => f.weapon.length = v, fmt: v => v + "px" });
-    slider(card, { label: "Hit width", min: 8, max: 50, step: 1,
-      get: () => f.weapon.width, set: v => f.weapon.width = v, fmt: v => v + "px" });
+      slider(card, { label: "Spin speed", min: 0, max: 0.5, step: 0.01,
+        get: () => w.spinSpeed ?? 0.12, set: v => w.spinSpeed = v, fmt: v => v.toFixed(2) });
+      slider(card, { label: "Heal on hit", min: 0, max: 40, step: 1,
+        get: () => w.heal, set: v => w.heal = v });
+      slider(card, { label: "Knockback", min: 0, max: 15000, step: 100,
+        get: () => w.knockback, set: v => w.knockback = v });
+      slider(card, { label: "Reach (length)", min: 20, max: 160, step: 5,
+        get: () => w.length, set: v => w.length = v, fmt: v => v + "px" });
+      slider(card, { label: "Hit width", min: 8, max: 50, step: 1,
+        get: () => w.width, set: v => w.width = v, fmt: v => v + "px" });
+    } else if (kind === "ranged") {
+      slider(card, { label: "Fire rate (frames/shot)", min: 8, max: 180, step: 2,
+        get: () => wp(w, "fireRate"), set: v => w.fireRate = v });
+      slider(card, { label: "Projectile speed", min: 3, max: 20, step: 0.5,
+        get: () => wp(w, "projectileSpeed"), set: v => w.projectileSpeed = v });
+      slider(card, { label: "Knockback", min: 0, max: 15000, step: 100,
+        get: () => w.knockback, set: v => w.knockback = v });
+      if (effect === "freeze") {
+        slider(card, { label: "Freeze duration (frames)", min: 30, max: 300, step: 10,
+          get: () => wp(w, "effectDuration"), set: v => w.effectDuration = v });
+      } else if (effect === "burn") {
+        slider(card, { label: "Burn dmg/sec", min: 1, max: 40, step: 1,
+          get: () => wp(w, "effectPower"), set: v => w.effectPower = v });
+        slider(card, { label: "Burn duration (frames)", min: 30, max: 300, step: 10,
+          get: () => wp(w, "effectDuration"), set: v => w.effectDuration = v });
+      }
+    } else { // aura (poison)
+      slider(card, { label: "Pool dmg/sec", min: 1, max: 40, step: 1,
+        get: () => wp(w, "effectPower"), set: v => w.effectPower = v });
+      slider(card, { label: "Drop rate (frames/pool)", min: 20, max: 240, step: 5,
+        get: () => wp(w, "fireRate"), set: v => w.fireRate = v });
+      slider(card, { label: "Pool radius", min: 30, max: 160, step: 5,
+        get: () => wp(w, "zoneRadius"), set: v => w.zoneRadius = v, fmt: v => v + "px" });
+      slider(card, { label: "Pool lifetime (frames)", min: 30, max: 360, step: 10,
+        get: () => wp(w, "effectDuration"), set: v => w.effectDuration = v });
+    }
   });
 }
 
@@ -1346,7 +1643,9 @@ function addFighter() {
     weapon: {
       type: FIGHTER_WEAPONS[i % FIGHTER_WEAPONS.length],
       length: 70, width: 22, damage: 12, heal: 4, knockback: 5700,
-      motion: i % 2 ? "spin" : "flail", spinSpeed: 0.13
+      motion: i % 2 ? "spin" : "flail", spinSpeed: 0.13,
+      fireRate: WDEF.fireRate, projectileSpeed: WDEF.projectileSpeed,
+      effectPower: WDEF.effectPower, effectDuration: WDEF.effectDuration, zoneRadius: WDEF.zoneRadius
     }
   });
   buildFighters();
