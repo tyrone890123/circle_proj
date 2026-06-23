@@ -1,0 +1,1257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Circle Battle Arena</title>
+<style>
+  :root {
+    --bg0: #05060d;
+    --bg1: #0c1024;
+    --panel: rgba(18, 22, 42, 0.85);
+    --panel-edge: rgba(120, 150, 255, 0.18);
+    --ink: #e8ecff;
+    --ink-dim: #97a0c8;
+    --accent: #6ea8ff;
+    --accent2: #ff6ec7;
+    --good: #46e6a0;
+    --bad: #ff5d6c;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    background:
+      radial-gradient(1200px 700px at 20% -10%, #15204a 0%, transparent 60%),
+      radial-gradient(1000px 700px at 100% 110%, #2a1138 0%, transparent 55%),
+      var(--bg0);
+    color: var(--ink);
+    font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+    min-height: 100vh;
+  }
+
+  .wrap {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 22px 18px 60px;
+  }
+
+  header.title {
+    text-align: center;
+    margin-bottom: 18px;
+  }
+  header.title h1 {
+    margin: 0;
+    font-size: 30px;
+    letter-spacing: 2px;
+    font-weight: 800;
+    background: linear-gradient(90deg, var(--accent), #b388ff, var(--accent2));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    text-shadow: 0 0 38px rgba(122, 138, 255, 0.25);
+  }
+  header.title p {
+    margin: 4px 0 0;
+    color: var(--ink-dim);
+    font-size: 13px;
+    letter-spacing: 1px;
+  }
+
+  .stage {
+    display: flex;
+    gap: 20px;
+    align-items: flex-start;
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+
+  .arena-col { flex: 0 0 auto; }
+
+  .canvas-frame {
+    position: relative;
+    padding: 10px;
+    border-radius: 18px;
+    background: linear-gradient(160deg, rgba(110,168,255,0.10), rgba(255,110,199,0.06));
+    border: 1px solid var(--panel-edge);
+    box-shadow: 0 24px 60px rgba(0,0,0,0.55), inset 0 0 40px rgba(80,110,255,0.05);
+  }
+  canvas#arena {
+    display: block;
+    border-radius: 12px;
+    background: #04050c;
+    box-shadow: 0 0 0 1px rgba(120,150,255,0.12);
+  }
+
+  .toolbar {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-top: 12px;
+    justify-content: center;
+  }
+
+  button {
+    font: inherit;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    color: var(--ink);
+    background: linear-gradient(180deg, rgba(70,90,160,0.55), rgba(40,52,100,0.55));
+    border: 1px solid rgba(140,165,255,0.28);
+    padding: 9px 15px;
+    border-radius: 10px;
+    cursor: pointer;
+    transition: transform .08s ease, box-shadow .15s ease, background .15s ease;
+  }
+  button:hover { transform: translateY(-1px); box-shadow: 0 6px 18px rgba(70,100,220,0.35); }
+  button:active { transform: translateY(0); }
+  button.primary { background: linear-gradient(180deg, #3f7bff, #2b59d8); border-color: #6f9bff; }
+  button.danger  { background: linear-gradient(180deg, #b3384a, #7d2030); border-color: #ff6b7d; }
+  button.ghost   { background: rgba(255,255,255,0.04); }
+  button:disabled { opacity: .45; cursor: not-allowed; transform: none; box-shadow: none; }
+
+  .readout {
+    margin-top: 14px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+  }
+  .stat-card {
+    background: var(--panel);
+    border: 1px solid var(--panel-edge);
+    border-radius: 12px;
+    padding: 10px 12px;
+  }
+  .stat-card h3 {
+    margin: 0 0 6px;
+    font-size: 14px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .swatch { width: 12px; height: 12px; border-radius: 50%; display: inline-block; box-shadow: 0 0 8px currentColor; }
+  .stat-row { display: flex; justify-content: space-between; font-size: 12px; color: var(--ink-dim); padding: 1px 0; }
+  .stat-row b { color: var(--ink); font-variant-numeric: tabular-nums; }
+
+  /* ---- Editor panel ---- */
+  .panel {
+    flex: 1 1 360px;
+    max-width: 430px;
+    background: var(--panel);
+    border: 1px solid var(--panel-edge);
+    border-radius: 16px;
+    padding: 6px 14px 16px;
+    backdrop-filter: blur(6px);
+  }
+  .panel h2 {
+    font-size: 15px;
+    letter-spacing: 1px;
+    color: var(--accent);
+    margin: 14px 0 8px;
+    text-transform: uppercase;
+  }
+  details.group {
+    border: 1px solid rgba(120,150,255,0.12);
+    border-radius: 10px;
+    margin-bottom: 10px;
+    overflow: hidden;
+    background: rgba(10,14,30,0.4);
+  }
+  details.group > summary {
+    cursor: pointer;
+    padding: 9px 12px;
+    font-weight: 700;
+    font-size: 13px;
+    letter-spacing: 0.6px;
+    list-style: none;
+    user-select: none;
+    background: rgba(255,255,255,0.03);
+  }
+  details.group > summary::-webkit-details-marker { display: none; }
+  details.group > summary::before { content: "▸ "; color: var(--accent); }
+  details.group[open] > summary::before { content: "▾ "; }
+  .group-body { padding: 10px 12px; }
+
+  .field { margin-bottom: 10px; }
+  .field label {
+    display: flex;
+    justify-content: space-between;
+    font-size: 12px;
+    color: var(--ink-dim);
+    margin-bottom: 4px;
+  }
+  .field label .val { color: var(--ink); font-variant-numeric: tabular-nums; }
+  input[type=range] { width: 100%; accent-color: var(--accent); }
+  input[type=text], input[type=number] {
+    width: 100%;
+    background: rgba(0,0,0,0.35);
+    border: 1px solid rgba(140,165,255,0.22);
+    color: var(--ink);
+    border-radius: 8px;
+    padding: 7px 9px;
+    font: inherit;
+    font-size: 13px;
+  }
+  input[type=color] {
+    width: 100%; height: 32px; border: none; background: none; cursor: pointer; padding: 0;
+  }
+  select {
+    width: 100%;
+    background: rgba(0,0,0,0.35);
+    border: 1px solid rgba(140,165,255,0.22);
+    color: var(--ink);
+    border-radius: 8px;
+    padding: 7px 9px;
+    font: inherit;
+  }
+  .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+
+  .fighters-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  @media (max-width: 520px) { .fighters-grid { grid-template-columns: 1fr; } }
+  .fighter-card {
+    border: 1px solid rgba(120,150,255,0.16);
+    border-radius: 10px;
+    padding: 10px;
+    background: rgba(10,14,30,0.5);
+  }
+  .fighter-card .fhead { font-weight: 800; font-size: 13px; margin-bottom: 8px; display:flex; align-items:center; gap:6px; }
+
+  .toggle { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink-dim); }
+  .toggle input { width: 16px; height: 16px; accent-color: var(--accent); }
+
+  .io-area { width: 100%; min-height: 120px; resize: vertical; background: rgba(0,0,0,0.4);
+    color: var(--ink); border:1px solid rgba(140,165,255,0.22); border-radius:8px; font-family: ui-monospace, monospace; font-size: 11px; padding: 8px; }
+  .io-buttons { display:flex; gap:8px; margin-top:8px; }
+  .hint { font-size: 11px; color: var(--ink-dim); margin: 2px 0 8px; line-height: 1.4; }
+  .reset-tag { font-size: 10px; color: var(--accent2); border:1px solid rgba(255,110,199,0.4); border-radius: 6px; padding: 0 5px; margin-left: 6px; }
+  .msg { font-size: 11px; min-height: 14px; margin-top: 4px; }
+  .msg.ok { color: var(--good); }
+  .msg.err { color: var(--bad); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="title">
+    <h1>⚔ CIRCLE BATTLE ARENA ⚔</h1>
+    <p>seeded physics auto-battler · config is the single source of truth</p>
+  </header>
+
+  <div class="stage">
+    <!-- ARENA -->
+    <div class="arena-col">
+      <div class="canvas-frame">
+        <canvas id="arena" width="600" height="740"></canvas>
+      </div>
+      <div class="toolbar">
+        <button id="btnStart" class="primary">▶ Start</button>
+        <button id="btnReset" class="danger">⟲ Reset</button>
+        <button id="btnReroll" class="ghost" title="New random seed + restart">🎲 Reroll</button>
+      </div>
+      <div class="readout" id="readout"></div>
+    </div>
+
+    <!-- EDITOR PANEL -->
+    <div class="panel">
+      <h2>Editor</h2>
+
+      <details class="group" open>
+        <summary>Arena</summary>
+        <div class="group-body" id="grpArena"></div>
+      </details>
+
+      <details class="group" open>
+        <summary>Physics</summary>
+        <div class="group-body" id="grpPhysics"></div>
+      </details>
+
+      <details class="group" open>
+        <summary>Match</summary>
+        <div class="group-body" id="grpMatch"></div>
+      </details>
+
+      <details class="group" open>
+        <summary>Fighters</summary>
+        <div class="group-body">
+          <div class="fighters-grid" id="grpFighters"></div>
+        </div>
+      </details>
+
+      <details class="group">
+        <summary>Save / Load (Export · Import JSON)</summary>
+        <div class="group-body">
+          <p class="hint">Export dumps the current CONFIG. Paste a CONFIG back and Import to load a matchup. (No browser storage — this is the save mechanism.)</p>
+          <textarea id="ioArea" class="io-area" spellcheck="false"></textarea>
+          <div class="io-buttons">
+            <button id="btnExport">⬇ Export</button>
+            <button id="btnImport">⬆ Import</button>
+            <button id="btnCopy" class="ghost">⧉ Copy</button>
+          </div>
+          <div id="ioMsg" class="msg"></div>
+        </div>
+      </details>
+    </div>
+  </div>
+</div>
+
+<script>
+"use strict";
+/* ============================================================================
+   Circle Battle Arena — single-file auto-battler.
+   CONFIG is the only state. The sim reads it; the editor writes it.
+   All randomness flows through a seeded PRNG (never Math.random in the sim).
+   ========================================================================== */
+
+const CONFIG = {
+  arena:   { width: 600, height: 740, wallThickness: 8, restitution: 0.98 },
+  physics: { friction: 0.992, maxSpeed: 14, minSpeed: 4.5, knockbackScale: 1.0 },
+  match: {
+    startHP: 80,
+    winOnZero: true,
+    seed: null,        // null/blank = roll a fresh random seed each Start
+    lastSeed: null     // the seed actually used; written back so good random runs are recoverable
+  },
+  fighters: [
+    {
+      name: "Light", color: "#f5d020",
+      start: { x: 0.30, y: 0.20 },
+      velocity: { x: 4, y: 3 },
+      radius: 34,
+      weapon: { type: "hammer", length: 70, width: 24, damage: 15, heal: 0,  knockback: 5700 }
+    },
+    {
+      name: "Plant", color: "#33cc33",
+      start: { x: 0.60, y: 0.70 },
+      velocity: { x: -3, y: -4 },
+      radius: 34,
+      weapon: { type: "blade", length: 70, width: 20, damage: 11, heal: 11, knockback: 5700 }
+    }
+  ]
+};
+
+/* Weapon presets — visual identity only (shapes now, sprites later, no engine change). */
+const WEAPONS = {
+  hammer: { label: "Hammer", shape: "hammer" },
+  blade:  { label: "Blade",  shape: "blade"  },
+  spike:  { label: "Spike",  shape: "spike"  },
+  flail:  { label: "Flail",  shape: "ball"   },
+  axe:    { label: "Axe",    shape: "axe"    }
+};
+
+/* ---------------------------------------------------------------------------
+   Seeded PRNG — mulberry32. Iron rule: the sim only ever pulls from here.
+   --------------------------------------------------------------------------- */
+function makeRNG(seed) {
+  let a = seed >>> 0;
+  return function () {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+let rng = makeRNG(1);
+const rand = (lo, hi) => lo + rng() * (hi - lo);
+
+/* ---------------------------------------------------------------------------
+   Simulation state. Runtime-only data lives here; tunables stay in CONFIG and
+   are read live each frame so the editor and sim never diverge.
+   --------------------------------------------------------------------------- */
+const canvas = document.getElementById("arena");
+const ctx = canvas.getContext("2d");
+
+let state = {
+  running: false,
+  finished: false,
+  winner: null,
+  frame: 0,
+  shake: 0,
+  fighters: [],     // runtime fighters (pos/vel/hp/weapon tip/totals)
+  particles: [],
+  floaters: []      // floating damage numbers
+};
+
+function resolveSeed() {
+  // A number in the field repeats that exact fight; blank/null rolls a fresh one.
+  const s = CONFIG.match.seed;
+  if (s === null || s === "" || s === undefined || Number.isNaN(Number(s))) {
+    return (Math.floor(Math.random() * 0xFFFFFFFF)) >>> 0; // seed selection is outside the sim, so this is allowed
+  }
+  return Number(s) >>> 0;
+}
+
+/* Build fresh runtime fighters from CONFIG. Called on Reset / Start-from-idle. */
+function initFighters() {
+  const A = CONFIG.arena;
+  state.fighters = CONFIG.fighters.map((f, i) => {
+    const px = f.start.x * A.width;
+    const py = f.start.y * A.height;
+    // Initial velocity = the configured base launch + seeded jitter, so the same
+    // seed always reproduces the fight while different seeds genuinely diverge.
+    const baseAng = Math.atan2(f.velocity.y, f.velocity.x);
+    const baseMag = Math.hypot(f.velocity.x, f.velocity.y) || CONFIG.physics.minSpeed;
+    const ang = baseAng + rand(-0.6, 0.6);
+    const mag = baseMag * rand(0.85, 1.25);
+    return {
+      cfg: i,                          // index back into CONFIG.fighters (live read)
+      x: px, y: py,
+      vx: Math.cos(ang) * mag, vy: Math.sin(ang) * mag,
+      hp: CONFIG.match.startHP,
+      // weapon tip — a tethered mass simulated with Verlet for flail motion
+      wx: px, wy: py,
+      wpx: px, wpy: py,
+      hitCooldown: [],                 // per-opponent contact latch
+      flash: 0,                        // white hit-flash timer
+      trail: [],
+      totalDamage: 0,
+      totalKnockback: 0,
+      hitsLanded: 0,
+      alive: true
+    };
+  });
+  // seed weapon tips offset along initial velocity so they don't start stacked
+  state.fighters.forEach((rf) => {
+    const fc = CONFIG.fighters[rf.cfg];
+    const sp = Math.hypot(rf.vx, rf.vy) || 1;
+    rf.wx = rf.x + (rf.vx / sp) * fc.weapon.length;
+    rf.wy = rf.y + (rf.vy / sp) * fc.weapon.length;
+    rf.wpx = rf.wx; rf.wpy = rf.wy;
+  });
+}
+
+/* ---------------------------------------------------------------------------
+   Match control
+   --------------------------------------------------------------------------- */
+function startMatch() {
+  if (state.running) return;                 // Start is a no-op while running
+  if (state.finished || state.frame === 0) {
+    const seed = resolveSeed();
+    CONFIG.match.lastSeed = seed;
+    syncSeedField();
+    rng = makeRNG(seed);
+    state.finished = false;
+    state.winner = null;
+    state.frame = 0;
+    state.particles = [];
+    state.floaters = [];
+    initFighters();
+  }
+  state.running = true;
+  updateButtons();
+}
+
+function resetMatch() {
+  state.running = false;
+  state.finished = false;
+  state.winner = null;
+  state.frame = 0;
+  state.shake = 0;
+  state.particles = [];
+  state.floaters = [];
+  initFighters();
+  updateButtons();
+  drawFrame(); // hold at frame 0
+}
+
+function rerollSeed() {
+  // Decided default: reroll writes a fresh seed AND auto-restarts.
+  CONFIG.match.seed = (Math.floor(Math.random() * 0xFFFFFFFF)) >>> 0;
+  syncSeedField();
+  state.running = false;
+  state.finished = false;
+  state.frame = 0;
+  startMatch();
+}
+
+/* ---------------------------------------------------------------------------
+   Physics + collision
+   --------------------------------------------------------------------------- */
+function clampSpeed(rf, maxSpeed) {
+  const sp = Math.hypot(rf.vx, rf.vy);
+  if (sp > maxSpeed) {
+    rf.vx = (rf.vx / sp) * maxSpeed;
+    rf.vy = (rf.vy / sp) * maxSpeed;
+  }
+}
+
+function stepFighter(rf) {
+  const A = CONFIG.arena;
+  const P = CONFIG.physics;
+  const fc = CONFIG.fighters[rf.cfg];
+  const wall = A.wallThickness;
+  const r = fc.radius;
+
+  // 1. integrate position
+  rf.x += rf.vx;
+  rf.y += rf.vy;
+
+  // 2. friction + speed clamp, then a minimum-speed floor so the fight never
+  //    stalls (the reference circles never coast to a stop — they cruise & clash).
+  rf.vx *= P.friction;
+  rf.vy *= P.friction;
+  clampSpeed(rf, P.maxSpeed);
+  if (P.minSpeed > 0) {
+    let sp = Math.hypot(rf.vx, rf.vy);
+    if (sp < P.minSpeed) {
+      if (sp < 0.001) { rf.vx = rand(-1, 1); rf.vy = rand(-1, 1); } // seeded nudge if dead-stopped
+      sp = Math.hypot(rf.vx, rf.vy) || 1;
+      rf.vx = (rf.vx / sp) * P.minSpeed;
+      rf.vy = (rf.vy / sp) * P.minSpeed;
+    }
+  }
+
+  // 3. wall reflection with restitution
+  const left = wall + r, right = A.width - wall - r;
+  const top = wall + r, bottom = A.height - wall - r;
+  if (rf.x < left)  { rf.x = left;  rf.vx = Math.abs(rf.vx) * A.restitution; }
+  if (rf.x > right) { rf.x = right; rf.vx = -Math.abs(rf.vx) * A.restitution; }
+  if (rf.y < top)    { rf.y = top;    rf.vy = Math.abs(rf.vy) * A.restitution; }
+  if (rf.y > bottom) { rf.y = bottom; rf.vy = -Math.abs(rf.vy) * A.restitution; }
+
+  // 4. weapon tip trails the circle: a tethered Verlet mass anchored at center,
+  //    biased outward along velocity so it swings/flails as the body moves & bounces.
+  const len = fc.weapon.length + r;
+  // Verlet inertia
+  const nx = rf.wx + (rf.wx - rf.wpx) * 0.86;
+  const ny = rf.wy + (rf.wy - rf.wpy) * 0.86;
+  rf.wpx = rf.wx; rf.wpy = rf.wy;
+  rf.wx = nx; rf.wy = ny;
+  // a gentle pull toward the "lead" point ahead of the body keeps it swinging
+  const sp = Math.hypot(rf.vx, rf.vy);
+  if (sp > 0.01) {
+    const lead = 0.18;
+    rf.wx += (rf.vx / sp) * len * lead * 0.12;
+    rf.wy += (rf.vy / sp) * len * lead * 0.12;
+  }
+  // distance constraint to anchor (the circle center)
+  let dx = rf.wx - rf.x, dy = rf.wy - rf.y;
+  let d = Math.hypot(dx, dy) || 0.0001;
+  rf.wx = rf.x + (dx / d) * len;
+  rf.wy = rf.y + (dy / d) * len;
+
+  // trail history for the glow streak
+  rf.trail.push({ x: rf.x, y: rf.y });
+  if (rf.trail.length > 14) rf.trail.shift();
+
+  if (rf.flash > 0) rf.flash--;
+}
+
+/* Circle-vs-circle body collision: the bodies ricochet off each other (equal
+   mass), keeping the arena lively like the reference. Separates overlap, then
+   reflects the velocity components along the contact normal by restitution. */
+function resolveBodies() {
+  const fs = state.fighters;
+  for (let i = 0; i < fs.length; i++) {
+    for (let j = i + 1; j < fs.length; j++) {
+      const a = fs[i], b = fs[j];
+      if (!a.alive || !b.alive) continue;
+      const ra = CONFIG.fighters[a.cfg].radius;
+      const rb = CONFIG.fighters[b.cfg].radius;
+      let dx = b.x - a.x, dy = b.y - a.y;
+      let d = Math.hypot(dx, dy) || 0.0001;
+      const minDist = ra + rb;
+      if (d < minDist) {
+        const nx = dx / d, ny = dy / d;
+        const overlap = (minDist - d) / 2;
+        a.x -= nx * overlap; a.y -= ny * overlap;
+        b.x += nx * overlap; b.y += ny * overlap;
+        const rvx = b.vx - a.vx, rvy = b.vy - a.vy;
+        const vn = rvx * nx + rvy * ny;
+        if (vn < 0) {
+          const imp = -(1 + CONFIG.arena.restitution) * vn / 2; // equal mass
+          a.vx -= imp * nx; a.vy -= imp * ny;
+          b.vx += imp * nx; b.vy += imp * ny;
+        }
+      }
+    }
+  }
+}
+
+/* closest point on segment AB to point P */
+function closestOnSeg(px, py, ax, ay, bx, by) {
+  const abx = bx - ax, aby = by - ay;
+  const apx = px - ax, apy = py - ay;
+  const len2 = abx * abx + aby * aby || 0.0001;
+  let t = (apx * abx + apy * aby) / len2;
+  t = Math.max(0, Math.min(1, t));
+  return { x: ax + abx * t, y: ay + aby * t };
+}
+
+function handleCombat() {
+  const fs = state.fighters;
+  for (let i = 0; i < fs.length; i++) {
+    for (let j = 0; j < fs.length; j++) {
+      if (i === j) continue;
+      const atk = fs[i], def = fs[j];
+      if (!atk.alive || !def.alive) continue;
+      const aCfg = CONFIG.fighters[atk.cfg];
+      const dCfg = CONFIG.fighters[def.cfg];
+      const w = aCfg.weapon;
+
+      // capsule = segment from attacker center to weapon tip, radius = weapon.width/2
+      const cp = closestOnSeg(def.x, def.y, atk.x, atk.y, atk.wx, atk.wy);
+      const dx = def.x - cp.x, dy = def.y - cp.y;
+      const dist = Math.hypot(dx, dy);
+      const reach = dCfg.radius + w.width / 2;
+
+      if (dist <= reach) {
+        if (!atk.hitCooldown[j]) {
+          atk.hitCooldown[j] = true;   // latch — one hit per contact until separation
+          applyHit(atk, def, w, dx, dy, dist || 0.0001);
+        }
+      } else if (dist > reach + 6) {
+        atk.hitCooldown[j] = false;    // bodies separated → re-arm
+      }
+    }
+  }
+}
+
+function applyHit(atk, def, w, dx, dy, dist) {
+  const P = CONFIG.physics;
+  // damage
+  def.hp -= w.damage;
+  atk.totalDamage += w.damage;
+  atk.hitsLanded++;
+  def.flash = 8;
+
+  // self-heal, capped at startHP
+  if (w.heal) {
+    atk.hp = Math.min(CONFIG.match.startHP, atk.hp + w.heal);
+  }
+
+  // knockback along contact normal
+  const nx = dx / dist, ny = dy / dist;
+  const kb = w.knockback * P.knockbackScale * (1 / 60); // dt
+  def.vx += nx * kb;
+  def.vy += ny * kb;
+  atk.totalKnockback += w.knockback * P.knockbackScale;
+
+  // juice
+  const col = CONFIG.fighters[atk.cfg].color;
+  spawnBurst(def.x + nx * CONFIG.fighters[def.cfg].radius,
+             def.y + ny * CONFIG.fighters[def.cfg].radius, col);
+  spawnFloater(def.x, def.y - CONFIG.fighters[def.cfg].radius - 10, "-" + w.damage, "#ff5d6c");
+  if (w.heal) spawnFloater(atk.x, atk.y - CONFIG.fighters[atk.cfg].radius - 10, "+" + w.heal, "#46e6a0");
+  state.shake = Math.min(16, state.shake + Math.min(10, w.knockback / 900));
+
+  // death check
+  if (CONFIG.match.winOnZero && def.hp <= 0) {
+    def.hp = 0;
+    def.alive = false;
+    declareWinner();
+  }
+}
+
+function declareWinner() {
+  const alive = state.fighters.filter(f => f.alive);
+  if (alive.length <= 1) {
+    state.running = false;
+    state.finished = true;
+    state.winner = alive.length === 1 ? CONFIG.fighters[alive[0].cfg].name : "Draw";
+    // confetti-ish celebration
+    if (alive.length === 1) {
+      const w = alive[0];
+      for (let k = 0; k < 60; k++) {
+        spawnBurst(w.x, w.y, CONFIG.fighters[w.cfg].color, true);
+      }
+    }
+    updateButtons();
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Particles & floating numbers (purely cosmetic juice)
+   --------------------------------------------------------------------------- */
+function spawnBurst(x, y, color, big) {
+  const n = big ? 6 : 10;
+  for (let i = 0; i < n; i++) {
+    const a = rng() * Math.PI * 2;
+    const sp = (big ? 2 : 1) * (1 + rng() * 4);
+    state.particles.push({
+      x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - (big ? 1 : 0),
+      life: 1, decay: 0.02 + rng() * 0.03, color, size: 2 + rng() * 3
+    });
+  }
+}
+function spawnFloater(x, y, text, color) {
+  state.floaters.push({ x, y, text, color, life: 1 });
+}
+function stepEffects() {
+  for (const p of state.particles) {
+    p.x += p.vx; p.y += p.vy; p.vy += 0.06; p.vx *= 0.98; p.life -= p.decay;
+  }
+  state.particles = state.particles.filter(p => p.life > 0);
+  for (const f of state.floaters) { f.y -= 0.7; f.life -= 0.02; }
+  state.floaters = state.floaters.filter(f => f.life > 0);
+  if (state.shake > 0) state.shake *= 0.86;
+}
+
+/* ---------------------------------------------------------------------------
+   Rendering
+   --------------------------------------------------------------------------- */
+function drawFrame() {
+  const A = CONFIG.arena;
+  if (canvas.width !== A.width || canvas.height !== A.height) {
+    canvas.width = A.width;
+    canvas.height = A.height;
+  }
+  ctx.save();
+
+  // screen shake
+  if (state.shake > 0.4) {
+    ctx.translate((rng() - 0.5) * state.shake, (rng() - 0.5) * state.shake);
+  }
+
+  drawBackground(A);
+  drawWalls(A);
+
+  // trails first (under everything)
+  for (const rf of state.fighters) drawTrail(rf);
+  for (const rf of state.fighters) drawWeapon(rf);
+  for (const rf of state.fighters) drawCircle(rf);
+
+  drawParticles();
+  drawFloaters();
+
+  ctx.restore();
+
+  if (state.finished) drawWinOverlay(A);
+}
+
+function drawBackground(A) {
+  const g = ctx.createRadialGradient(A.width/2, A.height/2, 40, A.width/2, A.height/2, A.height*0.8);
+  g.addColorStop(0, "#0a1130");
+  g.addColorStop(1, "#04050c");
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, A.width, A.height);
+
+  // subtle animated grid
+  ctx.strokeStyle = "rgba(90,120,220,0.06)";
+  ctx.lineWidth = 1;
+  const step = 40;
+  const off = (state.frame * 0.4) % step;
+  ctx.beginPath();
+  for (let x = -off; x < A.width; x += step) { ctx.moveTo(x, 0); ctx.lineTo(x, A.height); }
+  for (let y = -off; y < A.height; y += step) { ctx.moveTo(0, y); ctx.lineTo(A.width, y); }
+  ctx.stroke();
+}
+
+function drawWalls(A) {
+  ctx.lineWidth = A.wallThickness;
+  ctx.strokeStyle = "rgba(120,160,255,0.55)";
+  ctx.shadowColor = "rgba(120,160,255,0.7)";
+  ctx.shadowBlur = 16;
+  const t = A.wallThickness / 2;
+  ctx.strokeRect(t, t, A.width - A.wallThickness, A.height - A.wallThickness);
+  ctx.shadowBlur = 0;
+}
+
+function drawTrail(rf) {
+  const col = CONFIG.fighters[rf.cfg].color;
+  const r = CONFIG.fighters[rf.cfg].radius;
+  for (let i = 0; i < rf.trail.length; i++) {
+    const p = rf.trail[i];
+    const a = (i / rf.trail.length) * 0.28;
+    ctx.beginPath();
+    ctx.fillStyle = hexA(col, a);
+    ctx.arc(p.x, p.y, r * (0.4 + 0.5 * i / rf.trail.length), 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+function drawWeapon(rf) {
+  const fc = CONFIG.fighters[rf.cfg];
+  const w = fc.weapon;
+  const col = fc.color;
+  const shape = (WEAPONS[w.type] && WEAPONS[w.type].shape) || "blade";
+
+  // handle/tether from circle edge to tip
+  const ang = Math.atan2(rf.wy - rf.y, rf.wx - rf.x);
+  const ex = rf.x + Math.cos(ang) * fc.radius;
+  const ey = rf.y + Math.sin(ang) * fc.radius;
+
+  ctx.save();
+  ctx.shadowColor = col;
+  ctx.shadowBlur = 14;
+  ctx.lineCap = "round";
+
+  // shaft
+  ctx.strokeStyle = "rgba(220,225,255,0.85)";
+  ctx.lineWidth = Math.max(4, w.width * 0.28);
+  ctx.beginPath();
+  ctx.moveTo(ex, ey);
+  ctx.lineTo(rf.wx, rf.wy);
+  ctx.stroke();
+
+  // head
+  ctx.translate(rf.wx, rf.wy);
+  ctx.rotate(ang);
+  ctx.fillStyle = col;
+  ctx.strokeStyle = "rgba(255,255,255,0.85)";
+  ctx.lineWidth = 2;
+  const s = w.width;
+
+  if (shape === "hammer") {
+    roundRect(-s*0.55, -s*0.9, s*1.1, s*1.8, 5); ctx.fill(); ctx.stroke();
+  } else if (shape === "blade") {
+    ctx.beginPath();
+    ctx.moveTo(-s*0.2, -s*0.5);
+    ctx.lineTo(s*1.4, 0);
+    ctx.lineTo(-s*0.2, s*0.5);
+    ctx.closePath(); ctx.fill(); ctx.stroke();
+  } else if (shape === "spike") {
+    ctx.beginPath();
+    ctx.moveTo(0, -s*0.4); ctx.lineTo(s*1.6, 0); ctx.lineTo(0, s*0.4);
+    ctx.closePath(); ctx.fill(); ctx.stroke();
+  } else if (shape === "axe") {
+    ctx.beginPath();
+    ctx.arc(0, 0, s*0.9, -Math.PI*0.6, Math.PI*0.6);
+    ctx.lineTo(0,0); ctx.closePath(); ctx.fill(); ctx.stroke();
+  } else { // ball / flail
+    ctx.beginPath(); ctx.arc(0, 0, s*0.7, 0, Math.PI*2); ctx.fill(); ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawCircle(rf) {
+  const fc = CONFIG.fighters[rf.cfg];
+  const r = fc.radius;
+  const col = fc.color;
+
+  ctx.save();
+  // body with radial shading + glow
+  ctx.shadowColor = col;
+  ctx.shadowBlur = rf.alive ? 22 : 4;
+  const g = ctx.createRadialGradient(rf.x - r*0.3, rf.y - r*0.3, r*0.1, rf.x, rf.y, r);
+  g.addColorStop(0, lighten(col, 0.45));
+  g.addColorStop(1, rf.alive ? col : "#3a3a3a");
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.arc(rf.x, rf.y, r, 0, Math.PI * 2);
+  ctx.fill();
+
+  // hit flash
+  if (rf.flash > 0) {
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = "rgba(255,255,255," + (rf.flash / 8 * 0.7) + ")";
+    ctx.beginPath(); ctx.arc(rf.x, rf.y, r, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.shadowBlur = 0;
+
+  // rim
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = "rgba(255,255,255,0.5)";
+  ctx.beginPath(); ctx.arc(rf.x, rf.y, r, 0, Math.PI * 2); ctx.stroke();
+  ctx.restore();
+
+  // HP bar above the circle
+  drawHPBar(rf, fc, r);
+
+  // name + current damage label
+  ctx.fillStyle = "rgba(255,255,255,0.92)";
+  ctx.font = "700 12px Segoe UI, sans-serif";
+  ctx.textAlign = "center";
+  ctx.fillText(fc.name, rf.x, rf.y + 4);
+}
+
+function drawHPBar(rf, fc, r) {
+  const maxHP = CONFIG.match.startHP;
+  const pct = Math.max(0, rf.hp / maxHP);
+  const bw = Math.max(54, r * 1.8);
+  const bh = 8;
+  const bx = rf.x - bw / 2;
+  const by = rf.y - r - 20;
+
+  // track
+  ctx.fillStyle = "rgba(0,0,0,0.55)";
+  roundRect(bx - 2, by - 2, bw + 4, bh + 4, 5); ctx.fill();
+
+  // fill — green→yellow→red by remaining HP
+  const hue = 120 * pct;
+  ctx.fillStyle = `hsl(${hue}, 80%, 50%)`;
+  ctx.shadowColor = `hsl(${hue}, 80%, 50%)`;
+  ctx.shadowBlur = 8;
+  roundRect(bx, by, bw * pct, bh, 4); ctx.fill();
+  ctx.shadowBlur = 0;
+
+  // numeric HP + current weapon damage
+  ctx.fillStyle = "rgba(255,255,255,0.9)";
+  ctx.font = "700 11px Segoe UI, sans-serif";
+  ctx.textAlign = "center";
+  ctx.fillText(`${Math.ceil(rf.hp)} HP`, rf.x, by - 5);
+  ctx.fillStyle = "rgba(255,210,120,0.95)";
+  ctx.font = "600 10px Segoe UI, sans-serif";
+  ctx.fillText(`⚔ ${fc.weapon.damage}`, rf.x, by + bh + 12);
+}
+
+function drawParticles() {
+  for (const p of state.particles) {
+    ctx.globalAlpha = Math.max(0, p.life);
+    ctx.fillStyle = p.color;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.size * p.life, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+function drawFloaters() {
+  ctx.textAlign = "center";
+  for (const f of state.floaters) {
+    ctx.globalAlpha = Math.max(0, f.life);
+    ctx.fillStyle = f.color;
+    ctx.font = "800 18px Segoe UI, sans-serif";
+    ctx.fillText(f.text, f.x, f.y);
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawWinOverlay(A) {
+  ctx.save();
+  ctx.fillStyle = "rgba(4,6,14,0.62)";
+  ctx.fillRect(0, 0, A.width, A.height);
+  ctx.textAlign = "center";
+
+  const isDraw = state.winner === "Draw";
+  ctx.fillStyle = "#fff";
+  ctx.font = "800 16px Segoe UI, sans-serif";
+  ctx.fillText(isDraw ? "DOUBLE KO" : "WINNER", A.width/2, A.height/2 - 44);
+
+  ctx.font = "900 44px Segoe UI, sans-serif";
+  const grd = ctx.createLinearGradient(0, A.height/2-20, 0, A.height/2+30);
+  grd.addColorStop(0, "#ffe08a"); grd.addColorStop(1, "#ff8ad0");
+  ctx.fillStyle = grd;
+  ctx.shadowColor = "rgba(255,180,120,0.6)"; ctx.shadowBlur = 24;
+  ctx.fillText(isDraw ? "—" : state.winner, A.width/2, A.height/2 + 6);
+  ctx.shadowBlur = 0;
+
+  ctx.fillStyle = "rgba(220,228,255,0.85)";
+  ctx.font = "600 13px ui-monospace, monospace";
+  ctx.fillText("seed: " + CONFIG.match.lastSeed, A.width/2, A.height/2 + 46);
+  ctx.fillStyle = "rgba(160,175,220,0.8)";
+  ctx.font = "500 12px Segoe UI, sans-serif";
+  ctx.fillText("Reset to fight again · same seed repeats this fight", A.width/2, A.height/2 + 70);
+  ctx.restore();
+}
+
+/* small canvas helpers */
+function roundRect(x, y, w, h, r) {
+  r = Math.min(r, w/2, h/2);
+  ctx.beginPath();
+  ctx.moveTo(x+r, y);
+  ctx.arcTo(x+w, y, x+w, y+h, r);
+  ctx.arcTo(x+w, y+h, x, y+h, r);
+  ctx.arcTo(x, y+h, x, y, r);
+  ctx.arcTo(x, y, x+w, y, r);
+  ctx.closePath();
+}
+function hexA(hex, a) {
+  const c = hexToRgb(hex);
+  return `rgba(${c.r},${c.g},${c.b},${a})`;
+}
+function lighten(hex, amt) {
+  const c = hexToRgb(hex);
+  const f = (v) => Math.round(v + (255 - v) * amt);
+  return `rgb(${f(c.r)},${f(c.g)},${f(c.b)})`;
+}
+function hexToRgb(hex) {
+  let h = hex.replace("#", "");
+  if (h.length === 3) h = h.split("").map(x => x + x).join("");
+  const n = parseInt(h, 16);
+  return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+}
+
+/* ---------------------------------------------------------------------------
+   Main loop
+   --------------------------------------------------------------------------- */
+function loop() {
+  if (state.running) {
+    state.frame++;
+    for (const rf of state.fighters) if (rf.alive) stepFighter(rf);
+    resolveBodies();
+    handleCombat();
+  }
+  stepEffects();
+  drawFrame();
+  updateReadout();
+  requestAnimationFrame(loop);
+}
+
+/* ---------------------------------------------------------------------------
+   Stat readout (HTML under the canvas)
+   --------------------------------------------------------------------------- */
+function updateReadout() {
+  const el = document.getElementById("readout");
+  let html = "";
+  state.fighters.forEach((rf) => {
+    const fc = CONFIG.fighters[rf.cfg];
+    html += `
+      <div class="stat-card">
+        <h3><span class="swatch" style="color:${fc.color};background:${fc.color}"></span>${escapeHtml(fc.name)} ${rf.alive ? "" : "💀"}</h3>
+        <div class="stat-row"><span>HP</span><b>${Math.ceil(rf.hp)} / ${CONFIG.match.startHP}</b></div>
+        <div class="stat-row"><span>Weapon dmg</span><b>${fc.weapon.damage}</b></div>
+        <div class="stat-row"><span>Total damage</span><b>${rf.totalDamage}</b></div>
+        <div class="stat-row"><span>Hits landed</span><b>${rf.hitsLanded}</b></div>
+        <div class="stat-row"><span>Total knockback</span><b>${Math.round(rf.totalKnockback)}</b></div>
+        <div class="stat-row"><span>Speed</span><b>${Math.hypot(rf.vx, rf.vy).toFixed(1)}</b></div>
+      </div>`;
+  });
+  el.innerHTML = html;
+}
+
+/* ===========================================================================
+   EDITOR PANEL — plain HTML inputs that read/write CONFIG.
+   Live edits apply immediately; Reset-gated edits take effect on next Reset.
+   =========================================================================== */
+function buildEditor() {
+  buildArena();
+  buildPhysics();
+  buildMatch();
+  buildFighters();
+}
+
+/* generic slider field */
+function slider(parent, opts) {
+  const { label, min, max, step, get, set, fmt, reset } = opts;
+  const wrap = document.createElement("div");
+  wrap.className = "field";
+  const lab = document.createElement("label");
+  lab.innerHTML = `<span>${label}${reset ? '<span class="reset-tag">on Reset</span>' : ''}</span><span class="val"></span>`;
+  const input = document.createElement("input");
+  input.type = "range";
+  input.min = min; input.max = max; input.step = step;
+  input.value = get();
+  const valEl = lab.querySelector(".val");
+  const show = () => valEl.textContent = (fmt ? fmt(get()) : get());
+  show();
+  input.addEventListener("input", () => {
+    set(parseFloat(input.value));
+    show();
+  });
+  wrap.appendChild(lab);
+  wrap.appendChild(input);
+  parent.appendChild(wrap);
+  return input;
+}
+
+function buildArena() {
+  const p = document.getElementById("grpArena");
+  p.innerHTML = "";
+  slider(p, { label: "Width", min: 360, max: 900, step: 10, reset: true,
+    get: () => CONFIG.arena.width, set: v => CONFIG.arena.width = v, fmt: v => v + "px" });
+  slider(p, { label: "Height", min: 360, max: 900, step: 10, reset: true,
+    get: () => CONFIG.arena.height, set: v => CONFIG.arena.height = v, fmt: v => v + "px" });
+  slider(p, { label: "Wall restitution (bounciness)", min: 0.5, max: 1.0, step: 0.01,
+    get: () => CONFIG.arena.restitution, set: v => CONFIG.arena.restitution = v, fmt: v => v.toFixed(2) });
+  slider(p, { label: "Wall thickness", min: 2, max: 24, step: 1,
+    get: () => CONFIG.arena.wallThickness, set: v => CONFIG.arena.wallThickness = v, fmt: v => v + "px" });
+}
+
+function buildPhysics() {
+  const p = document.getElementById("grpPhysics");
+  p.innerHTML = "";
+  slider(p, { label: "Friction (drag)", min: 0.95, max: 1.0, step: 0.001,
+    get: () => CONFIG.physics.friction, set: v => CONFIG.physics.friction = v, fmt: v => v.toFixed(3) });
+  slider(p, { label: "Max speed", min: 4, max: 30, step: 1,
+    get: () => CONFIG.physics.maxSpeed, set: v => CONFIG.physics.maxSpeed = v });
+  slider(p, { label: "Min speed (anti-stall)", min: 0, max: 12, step: 0.5,
+    get: () => CONFIG.physics.minSpeed, set: v => CONFIG.physics.minSpeed = v });
+  slider(p, { label: "Knockback scale", min: 0, max: 3, step: 0.05,
+    get: () => CONFIG.physics.knockbackScale, set: v => CONFIG.physics.knockbackScale = v, fmt: v => v.toFixed(2) + "×" });
+}
+
+function buildMatch() {
+  const p = document.getElementById("grpMatch");
+  p.innerHTML = "";
+  slider(p, { label: "Start HP", min: 10, max: 300, step: 5, reset: true,
+    get: () => CONFIG.match.startHP, set: v => CONFIG.match.startHP = v });
+
+  // win on zero toggle
+  const tWrap = document.createElement("div");
+  tWrap.className = "field";
+  const tl = document.createElement("label"); tl.className = "toggle";
+  const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = CONFIG.match.winOnZero;
+  cb.addEventListener("change", () => CONFIG.match.winOnZero = cb.checked);
+  tl.appendChild(cb); tl.appendChild(document.createTextNode("Win when HP reaches 0"));
+  tWrap.appendChild(tl); p.appendChild(tWrap);
+
+  // seed
+  const sWrap = document.createElement("div");
+  sWrap.className = "field";
+  const sl = document.createElement("label");
+  sl.innerHTML = `<span>Seed <span class="reset-tag">on Reset</span></span><span class="val"></span>`;
+  const si = document.createElement("input");
+  si.type = "text"; si.id = "seedField"; si.placeholder = "blank = random each Start";
+  si.value = CONFIG.match.seed == null ? "" : CONFIG.match.seed;
+  si.addEventListener("input", () => {
+    const v = si.value.trim();
+    CONFIG.match.seed = v === "" ? null : v;
+  });
+  sWrap.appendChild(sl); sWrap.appendChild(si); p.appendChild(sWrap);
+
+  const hint = document.createElement("p");
+  hint.className = "hint";
+  hint.textContent = "A number repeats that exact fight. Blank rolls a fresh seed each Start; the seed actually used is written back here so a good random run is shareable.";
+  p.appendChild(hint);
+}
+
+function buildFighters() {
+  const grid = document.getElementById("grpFighters");
+  grid.innerHTML = "";
+  CONFIG.fighters.forEach((f, i) => {
+    const card = document.createElement("div");
+    card.className = "fighter-card";
+    card.innerHTML = `<div class="fhead"><span class="swatch" style="color:${f.color};background:${f.color}"></span>${escapeHtml(f.name)}</div>`;
+    grid.appendChild(card);
+
+    // name
+    field(card, "Name", () => {
+      const inp = document.createElement("input"); inp.type = "text"; inp.value = f.name;
+      inp.addEventListener("input", () => { f.name = inp.value; refreshSwatches(); });
+      return inp;
+    });
+    // color
+    field(card, "Color", () => {
+      const inp = document.createElement("input"); inp.type = "color"; inp.value = f.color;
+      inp.addEventListener("input", () => { f.color = inp.value; refreshSwatches(); });
+      return inp;
+    });
+
+    // start pos (reset-gated)
+    const posRow = document.createElement("div"); posRow.className = "row2";
+    card.appendChild(posRow);
+    slider(posRow, { label: "Start X", min: 0.05, max: 0.95, step: 0.01, reset: true,
+      get: () => f.start.x, set: v => f.start.x = v, fmt: v => v.toFixed(2) });
+    slider(posRow, { label: "Start Y", min: 0.05, max: 0.95, step: 0.01, reset: true,
+      get: () => f.start.y, set: v => f.start.y = v, fmt: v => v.toFixed(2) });
+
+    // initial velocity (reset-gated)
+    const velRow = document.createElement("div"); velRow.className = "row2";
+    card.appendChild(velRow);
+    slider(velRow, { label: "Vel X", min: -12, max: 12, step: 0.5, reset: true,
+      get: () => f.velocity.x, set: v => f.velocity.x = v });
+    slider(velRow, { label: "Vel Y", min: -12, max: 12, step: 0.5, reset: true,
+      get: () => f.velocity.y, set: v => f.velocity.y = v });
+
+    // radius
+    slider(card, { label: "Radius", min: 14, max: 70, step: 1,
+      get: () => f.radius, set: v => f.radius = v, fmt: v => v + "px" });
+
+    // weapon type dropdown
+    field(card, "Weapon type", () => {
+      const sel = document.createElement("select");
+      Object.keys(WEAPONS).forEach(k => {
+        const o = document.createElement("option");
+        o.value = k; o.textContent = WEAPONS[k].label;
+        if (f.weapon.type === k) o.selected = true;
+        sel.appendChild(o);
+      });
+      sel.addEventListener("change", () => f.weapon.type = sel.value);
+      return sel;
+    });
+
+    // weapon stats (live)
+    slider(card, { label: "Damage", min: 0, max: 60, step: 1,
+      get: () => f.weapon.damage, set: v => f.weapon.damage = v });
+    slider(card, { label: "Heal on hit", min: 0, max: 40, step: 1,
+      get: () => f.weapon.heal, set: v => f.weapon.heal = v });
+    slider(card, { label: "Knockback", min: 0, max: 15000, step: 100,
+      get: () => f.weapon.knockback, set: v => f.weapon.knockback = v });
+    slider(card, { label: "Reach (length)", min: 20, max: 160, step: 5,
+      get: () => f.weapon.length, set: v => f.weapon.length = v, fmt: v => v + "px" });
+    slider(card, { label: "Hit width", min: 8, max: 50, step: 1,
+      get: () => f.weapon.width, set: v => f.weapon.width = v, fmt: v => v + "px" });
+  });
+}
+
+function field(parent, label, makeInput) {
+  const wrap = document.createElement("div");
+  wrap.className = "field";
+  const lab = document.createElement("label");
+  lab.innerHTML = `<span>${label}</span>`;
+  wrap.appendChild(lab);
+  wrap.appendChild(makeInput());
+  parent.appendChild(wrap);
+}
+
+function refreshSwatches() {
+  // cheap: rebuild fighter headers' swatches + readout reflect new names/colors live
+  document.querySelectorAll(".fighter-card .fhead").forEach((h, i) => {
+    const f = CONFIG.fighters[i];
+    if (!f) return;
+    h.innerHTML = `<span class="swatch" style="color:${f.color};background:${f.color}"></span>${escapeHtml(f.name)}`;
+  });
+}
+
+function syncSeedField() {
+  const si = document.getElementById("seedField");
+  if (si) si.value = CONFIG.match.seed == null
+    ? (CONFIG.match.lastSeed == null ? "" : CONFIG.match.lastSeed)
+    : CONFIG.match.seed;
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+}
+
+/* ---------------------------------------------------------------------------
+   Export / Import
+   --------------------------------------------------------------------------- */
+function exportConfig() {
+  document.getElementById("ioArea").value = JSON.stringify(CONFIG, null, 2);
+  showIoMsg("Exported current CONFIG.", true);
+}
+function importConfig() {
+  const txt = document.getElementById("ioArea").value.trim();
+  if (!txt) { showIoMsg("Paste a CONFIG JSON first.", false); return; }
+  let parsed;
+  try { parsed = JSON.parse(txt); }
+  catch (e) { showIoMsg("Invalid JSON: " + e.message, false); return; }
+  if (!parsed.arena || !parsed.physics || !parsed.match || !Array.isArray(parsed.fighters)) {
+    showIoMsg("JSON is missing required keys (arena/physics/match/fighters).", false);
+    return;
+  }
+  // copy fields onto CONFIG (keep the same object — it's the single source of truth)
+  CONFIG.arena = parsed.arena;
+  CONFIG.physics = parsed.physics;
+  CONFIG.match = parsed.match;
+  CONFIG.fighters = parsed.fighters;
+  buildEditor();
+  resetMatch();
+  showIoMsg("Imported — matchup loaded and reset to frame 0.", true);
+}
+function showIoMsg(msg, ok) {
+  const el = document.getElementById("ioMsg");
+  el.textContent = msg;
+  el.className = "msg " + (ok ? "ok" : "err");
+}
+
+/* ---------------------------------------------------------------------------
+   Wiring
+   --------------------------------------------------------------------------- */
+function updateButtons() {
+  document.getElementById("btnStart").disabled = state.running;
+}
+
+document.getElementById("btnStart").addEventListener("click", startMatch);
+document.getElementById("btnReset").addEventListener("click", resetMatch);
+document.getElementById("btnReroll").addEventListener("click", rerollSeed);
+document.getElementById("btnExport").addEventListener("click", exportConfig);
+document.getElementById("btnImport").addEventListener("click", importConfig);
+document.getElementById("btnCopy").addEventListener("click", () => {
+  const ta = document.getElementById("ioArea");
+  if (!ta.value) exportConfig();
+  ta.select();
+  navigator.clipboard?.writeText(ta.value).then(
+    () => showIoMsg("Copied to clipboard.", true),
+    () => showIoMsg("Select-and-copy manually.", false)
+  );
+});
+
+/* boot */
+buildEditor();
+resetMatch();
+loop();
+</script>
+</body>
+</html>
