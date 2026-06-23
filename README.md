@@ -17,6 +17,15 @@ fight. Pure vanilla JS + Canvas 2D, no build step, no dependencies, no backend.
     that freeze/slow; **Fire Staff** fires fireballs that leave a burning patch + burn DoT.
   - *Aura* — **Poison Censer** periodically drops poison pools that damage anyone inside.
   - Crowd-control effects (freeze, burn, poison) are fully seeded/deterministic.
+  - *Asymmetric archetypes* — **Dagger** (fast, weak, in/out thrusting jabber) and
+    **Maul** (slow, heavy, big knockback) — distinct attack *patterns*, not just numbers.
+- **Board obstacles** (toggleable) — a second entity type: **walls** (rectangular
+  barriers), **bumpers** (springy circles that kick fighters away), and **hazards**
+  (damaging zones). Positions are stored as arena fractions; add/remove and tune in the
+  editor.
+- **Pickups / power-ups** (toggleable) — mid-arena drops that grant a timed buff on
+  touch: **⚔ damage boost**, **🛡 shield**, **⚡ speed**. Spawn timing, position, and type
+  are seeded, so a given seed always drops the same pickups — great for comeback swings.
 - **2–8 fighters** — add or remove fighters from the editor for a free-for-all; the
   last circle standing wins. New fighters get a distinct color, weapon, and a start
   point spread around the arena.
