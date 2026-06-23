@@ -328,6 +328,7 @@ const CONFIG = {
     seed: null,        // null/blank = roll a fresh random seed each Start
     lastSeed: null     // the seed actually used; written back so good random runs are recoverable
   },
+  display: { showNames: true, showSeed: true },   // overlay toggles (cosmetic)
   fighters: [
     {
       name: "Light", color: "#f5d020",
@@ -417,6 +418,8 @@ function initFighters() {
       // weapon tip — a tethered mass simulated with Verlet for flail motion
       wx: px, wy: py,
       wpx: px, wpy: py,
+      prevX: px, prevY: py,            // render-interpolation snapshots (last sim state)
+      prevWX: px, prevWY: py,
       spin: ang,                       // weapon angle (used by "spin" motion mode)
       hitCooldown: [],                 // per-opponent contact latch
       flash: 0,                        // white hit-flash timer
@@ -434,6 +437,7 @@ function initFighters() {
     rf.wx = rf.x + (rf.vx / sp) * fc.weapon.length;
     rf.wy = rf.y + (rf.vy / sp) * fc.weapon.length;
     rf.wpx = rf.wx; rf.wpy = rf.wy;
+    rf.prevWX = rf.wx; rf.prevWY = rf.wy;
   });
 }
 
@@ -717,17 +721,28 @@ function stepEffects() {
 /* ---------------------------------------------------------------------------
    Rendering
    --------------------------------------------------------------------------- */
-function drawFrame() {
+function drawFrame(alpha) {
   const A = CONFIG.arena;
+  const a = (alpha == null) ? 1 : alpha;
   if (canvas.width !== A.width || canvas.height !== A.height) {
     canvas.width = A.width;
     canvas.height = A.height;
   }
+
+  // interpolated display coords (between the last two physics states)
+  for (const rf of state.fighters) {
+    rf.dx  = (rf.prevX  == null) ? rf.x  : rf.prevX  + (rf.x  - rf.prevX)  * a;
+    rf.dy  = (rf.prevY  == null) ? rf.y  : rf.prevY  + (rf.y  - rf.prevY)  * a;
+    rf.dwx = (rf.prevWX == null) ? rf.wx : rf.prevWX + (rf.wx - rf.prevWX) * a;
+    rf.dwy = (rf.prevWY == null) ? rf.wy : rf.prevWY + (rf.wy - rf.prevWY) * a;
+  }
+
   ctx.save();
 
-  // screen shake
+  // screen shake — purely cosmetic, so it uses Math.random (NOT the seeded sim
+  // PRNG); calling rng() during render would desync the fight across frame rates.
   if (state.shake > 0.4) {
-    ctx.translate((rng() - 0.5) * state.shake, (rng() - 0.5) * state.shake);
+    ctx.translate((Math.random() - 0.5) * state.shake, (Math.random() - 0.5) * state.shake);
   }
 
   drawBackground(A);
@@ -793,10 +808,10 @@ function drawWeapon(rf) {
   const col = fc.color;
   const shape = (WEAPONS[w.type] && WEAPONS[w.type].shape) || "blade";
 
-  // handle/tether from circle edge to tip
-  const ang = Math.atan2(rf.wy - rf.y, rf.wx - rf.x);
-  const ex = rf.x + Math.cos(ang) * fc.radius;
-  const ey = rf.y + Math.sin(ang) * fc.radius;
+  // handle/tether from circle edge to tip (interpolated display coords)
+  const ang = Math.atan2(rf.dwy - rf.dy, rf.dwx - rf.dx);
+  const ex = rf.dx + Math.cos(ang) * fc.radius;
+  const ey = rf.dy + Math.sin(ang) * fc.radius;
 
   ctx.save();
   ctx.shadowColor = col;
@@ -808,11 +823,11 @@ function drawWeapon(rf) {
   ctx.lineWidth = Math.max(4, w.width * 0.28);
   ctx.beginPath();
   ctx.moveTo(ex, ey);
-  ctx.lineTo(rf.wx, rf.wy);
+  ctx.lineTo(rf.dwx, rf.dwy);
   ctx.stroke();
 
   // head
-  ctx.translate(rf.wx, rf.wy);
+  ctx.translate(rf.dwx, rf.dwy);
   ctx.rotate(ang);
   ctx.fillStyle = col;
   ctx.strokeStyle = "rgba(255,255,255,0.85)";
@@ -846,40 +861,43 @@ function drawCircle(rf) {
   const r = fc.radius;
   const col = fc.color;
 
+  const cx = rf.dx, cy = rf.dy;
   ctx.save();
   // body with radial shading + glow
   ctx.shadowColor = col;
   ctx.shadowBlur = rf.alive ? 22 : 4;
-  const g = ctx.createRadialGradient(rf.x - r*0.3, rf.y - r*0.3, r*0.1, rf.x, rf.y, r);
+  const g = ctx.createRadialGradient(cx - r*0.3, cy - r*0.3, r*0.1, cx, cy, r);
   g.addColorStop(0, lighten(col, 0.45));
   g.addColorStop(1, rf.alive ? col : "#3a3a3a");
   ctx.fillStyle = g;
   ctx.beginPath();
-  ctx.arc(rf.x, rf.y, r, 0, Math.PI * 2);
+  ctx.arc(cx, cy, r, 0, Math.PI * 2);
   ctx.fill();
 
   // hit flash
   if (rf.flash > 0) {
     ctx.shadowBlur = 0;
     ctx.fillStyle = "rgba(255,255,255," + (rf.flash / 8 * 0.7) + ")";
-    ctx.beginPath(); ctx.arc(rf.x, rf.y, r, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill();
   }
   ctx.shadowBlur = 0;
 
   // rim
   ctx.lineWidth = 3;
   ctx.strokeStyle = "rgba(255,255,255,0.5)";
-  ctx.beginPath(); ctx.arc(rf.x, rf.y, r, 0, Math.PI * 2); ctx.stroke();
+  ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke();
   ctx.restore();
 
   // HP bar above the circle
   drawHPBar(rf, fc, r);
 
-  // name + current damage label
-  ctx.fillStyle = "rgba(255,255,255,0.92)";
-  ctx.font = "700 12px Segoe UI, sans-serif";
-  ctx.textAlign = "center";
-  ctx.fillText(fc.name, rf.x, rf.y + 4);
+  // name label (toggleable)
+  if (CONFIG.display.showNames) {
+    ctx.fillStyle = "rgba(255,255,255,0.92)";
+    ctx.font = "700 12px Segoe UI, sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText(fc.name, cx, cy + 4);
+  }
 }
 
 function drawHPBar(rf, fc, r) {
@@ -887,8 +905,8 @@ function drawHPBar(rf, fc, r) {
   const pct = Math.max(0, rf.hp / maxHP);
   const bw = Math.max(54, r * 1.8);
   const bh = 8;
-  const bx = rf.x - bw / 2;
-  const by = rf.y - r - 20;
+  const bx = rf.dx - bw / 2;
+  const by = rf.dy - r - 20;
 
   // track
   ctx.fillStyle = "rgba(0,0,0,0.55)";
@@ -906,10 +924,10 @@ function drawHPBar(rf, fc, r) {
   ctx.fillStyle = "rgba(255,255,255,0.9)";
   ctx.font = "700 11px Segoe UI, sans-serif";
   ctx.textAlign = "center";
-  ctx.fillText(`${Math.ceil(rf.hp)} HP`, rf.x, by - 5);
+  ctx.fillText(`${Math.ceil(rf.hp)} HP`, rf.dx, by - 5);
   ctx.fillStyle = "rgba(255,210,120,0.95)";
   ctx.font = "600 10px Segoe UI, sans-serif";
-  ctx.fillText(`⚔ ${fc.weapon.damage}`, rf.x, by + bh + 12);
+  ctx.fillText(`⚔ ${fc.weapon.damage}`, rf.dx, by + bh + 12);
 }
 
 function drawParticles() {
@@ -952,12 +970,14 @@ function drawWinOverlay(A) {
   ctx.fillText(isDraw ? "—" : state.winner, A.width/2, A.height/2 + 6);
   ctx.shadowBlur = 0;
 
-  ctx.fillStyle = "rgba(220,228,255,0.85)";
-  ctx.font = "600 13px ui-monospace, monospace";
-  ctx.fillText("seed: " + CONFIG.match.lastSeed, A.width/2, A.height/2 + 46);
+  if (CONFIG.display.showSeed) {
+    ctx.fillStyle = "rgba(220,228,255,0.85)";
+    ctx.font = "600 13px ui-monospace, monospace";
+    ctx.fillText("seed: " + CONFIG.match.lastSeed, A.width/2, A.height/2 + 46);
+  }
   ctx.fillStyle = "rgba(160,175,220,0.8)";
   ctx.font = "500 12px Segoe UI, sans-serif";
-  ctx.fillText("Reset to fight again · same seed repeats this fight", A.width/2, A.height/2 + 70);
+  ctx.fillText("Reset to fight again · same seed repeats this fight", A.width/2, A.height/2 + (CONFIG.display.showSeed ? 70 : 46));
   ctx.restore();
 }
 
@@ -989,19 +1009,44 @@ function hexToRgb(hex) {
 }
 
 /* ---------------------------------------------------------------------------
-   Main loop
+   Main loop — fixed-timestep simulation, interpolated rendering.
+
+   The physics steps at a fixed 60 Hz logical rate (keeps the fight deterministic
+   and consistently paced on every device). Rendering happens once per
+   requestAnimationFrame — i.e. at the display's native refresh (60/90/120 Hz) —
+   and interpolates between the previous and current physics states, so motion is
+   smooth at any refresh rate without the sim running faster on a faster screen.
    --------------------------------------------------------------------------- */
-function loop() {
+const SIM_STEP_MS = 1000 / 60;   // fixed logical timestep
+let _lastTime = null;
+let _acc = 0;
+
+function loop(now) {
+  now = now || performance.now();
+  requestAnimationFrame(loop);
+  if (_lastTime === null) _lastTime = now;
+  let elapsed = now - _lastTime;
+  _lastTime = now;
+  if (elapsed > 250) elapsed = 250;   // clamp big hitches (tab switch) — no spiral of death
+
   if (state.running) {
-    state.frame++;
-    for (const rf of state.fighters) if (rf.alive) stepFighter(rf);
-    resolveBodies();
-    handleCombat();
+    _acc += elapsed;
+    while (_acc >= SIM_STEP_MS) {
+      // snapshot positions so the render can interpolate toward the new ones
+      for (const rf of state.fighters) {
+        rf.prevX = rf.x; rf.prevY = rf.y;
+        rf.prevWX = rf.wx; rf.prevWY = rf.wy;
+      }
+      state.frame++;
+      for (const rf of state.fighters) if (rf.alive) stepFighter(rf);
+      resolveBodies();
+      handleCombat();
+      _acc -= SIM_STEP_MS;
+    }
   }
   stepEffects();
-  drawFrame();
+  drawFrame(state.running ? _acc / SIM_STEP_MS : 1);
   updateReadout();
-  requestAnimationFrame(loop);
 }
 
 /* ---------------------------------------------------------------------------
@@ -1101,6 +1146,10 @@ function buildMatch() {
   cb.addEventListener("change", () => CONFIG.match.winOnZero = cb.checked);
   tl.appendChild(cb); tl.appendChild(document.createTextNode("Win when HP reaches 0"));
   tWrap.appendChild(tl); p.appendChild(tWrap);
+
+  // display toggles: show/hide fighter names and the seed on the win overlay
+  checkbox(p, "Show fighter names", () => CONFIG.display.showNames, v => CONFIG.display.showNames = v);
+  checkbox(p, "Show seed on win screen", () => CONFIG.display.showSeed, v => CONFIG.display.showSeed = v);
 
   // seed
   const sWrap = document.createElement("div");
@@ -1216,6 +1265,18 @@ function field(parent, label, makeInput) {
   parent.appendChild(wrap);
 }
 
+/* labelled checkbox bound live to a CONFIG getter/setter */
+function checkbox(parent, label, get, set) {
+  const wrap = document.createElement("div");
+  wrap.className = "field";
+  const lab = document.createElement("label"); lab.className = "toggle";
+  const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = !!get();
+  cb.addEventListener("change", () => set(cb.checked));
+  lab.appendChild(cb); lab.appendChild(document.createTextNode(label));
+  wrap.appendChild(lab);
+  parent.appendChild(wrap);
+}
+
 function refreshSwatches() {
   // cheap: rebuild fighter headers' swatches + readout reflect new names/colors live
   document.querySelectorAll(".fighter-card .fhead").forEach((h, i) => {
@@ -1258,6 +1319,7 @@ function importConfig() {
   CONFIG.physics = parsed.physics;
   CONFIG.match = parsed.match;
   CONFIG.fighters = parsed.fighters;
+  CONFIG.display = parsed.display || { showNames: true, showSeed: true };
   buildEditor();
   resetMatch();
   showIoMsg("Imported — matchup loaded and reset to frame 0.", true);

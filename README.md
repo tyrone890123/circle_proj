@@ -20,8 +20,13 @@ fight. Pure vanilla JS + Canvas 2D, no build step, no dependencies, no backend.
   damage, plus a stat panel (total damage, hits, knockback, speed).
 - **Epic juice** — glow, motion trails, particle bursts, floating damage numbers,
   screen shake, and a winner overlay that shows the seed.
+- **Smooth at any refresh rate** — physics runs at a fixed 60 Hz logical timestep
+  while rendering happens every `requestAnimationFrame` (your display's native
+  60/90/120 Hz) with interpolation, so motion is fluid and the fight runs at the
+  same speed on every device.
 - **Live editor panel** — plain HTML inputs beside the canvas, grouped to mirror
   `CONFIG`. Most edits apply live; start position / velocity / HP / seed apply on Reset.
+  Includes display toggles to hide fighter names and the win-screen seed.
 - **Deterministic seeding** — a seeded PRNG (mulberry32) drives all randomness. A number
   in the seed field repeats that exact fight; blank rolls a fresh seed each Start and
   writes it back so a good random run is shareable.
