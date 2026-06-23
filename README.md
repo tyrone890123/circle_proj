@@ -10,8 +10,9 @@ fight. Pure vanilla JS + Canvas 2D, no build step, no dependencies, no backend.
 
 - **Physics arena** — circles slide, bounce off the walls *and each other*, and never
   stall (a minimum-speed floor keeps the action going, like the reference).
-- **Tethered flail weapons** — each weapon trails its circle as a Verlet-simulated
-  tethered mass, swinging out as the body moves and bounces.
+- **Weapon motion toggle** — per fighter, each weapon either *follows the circle's
+  direction* (a Verlet-simulated tethered flail that swings as the body moves and
+  bounces) or *spins* at a constant, tunable angular speed.
 - **Combat** — circle-vs-capsule hit detection, one hit per contact (re-arms on
   separation), damage, self-heal-on-hit (capped at start HP), and knockback along the
   contact normal.
