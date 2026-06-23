@@ -233,6 +233,15 @@
     background: rgba(10,14,30,0.5);
   }
   .fighter-card .fhead { font-weight: 800; font-size: 13px; margin-bottom: 8px; display:flex; align-items:center; gap:6px; }
+  .fighter-card .fname { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rm-fighter {
+    flex: 0 0 auto; padding: 1px 7px; font-size: 12px; line-height: 1.4;
+    border-radius: 6px; color: var(--bad);
+    background: rgba(255,93,108,0.10); border: 1px solid rgba(255,93,108,0.4);
+  }
+  .rm-fighter:hover { background: rgba(255,93,108,0.22); box-shadow: none; }
+  .fighter-controls { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+  .fighter-controls .count { font-size: 12px; color: var(--ink-dim); }
 
   .toggle { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink-dim); }
   .toggle input { width: 16px; height: 16px; accent-color: var(--accent); }
@@ -290,6 +299,7 @@
       <details class="group" open>
         <summary>Fighters</summary>
         <div class="group-body">
+          <div id="fighterControls" class="fighter-controls"></div>
           <div class="fighters-grid" id="grpFighters"></div>
         </div>
       </details>
@@ -1171,13 +1181,42 @@ function buildMatch() {
   p.appendChild(hint);
 }
 
+const FIGHTER_MAX = 8;
+const FIGHTER_COLORS = ["#f5d020", "#33cc33", "#ff6ec7", "#6ea8ff", "#ff7043", "#b388ff", "#26c6da", "#ff5d6c"];
+const FIGHTER_WEAPONS = ["hammer", "blade", "spike", "flail", "axe"];
+
 function buildFighters() {
+  // Add-fighter control + live count (free-for-all: last circle standing wins)
+  const controls = document.getElementById("fighterControls");
+  controls.innerHTML = "";
+  const add = document.createElement("button");
+  add.className = "ghost";
+  add.textContent = "➕ Add fighter";
+  add.disabled = CONFIG.fighters.length >= FIGHTER_MAX;
+  add.addEventListener("click", addFighter);
+  const count = document.createElement("span");
+  count.className = "count";
+  count.textContent = `${CONFIG.fighters.length} / ${FIGHTER_MAX} fighters`;
+  controls.appendChild(add);
+  controls.appendChild(count);
+
   const grid = document.getElementById("grpFighters");
   grid.innerHTML = "";
   CONFIG.fighters.forEach((f, i) => {
     const card = document.createElement("div");
     card.className = "fighter-card";
-    card.innerHTML = `<div class="fhead"><span class="swatch" style="color:${f.color};background:${f.color}"></span>${escapeHtml(f.name)}</div>`;
+    const head = document.createElement("div");
+    head.className = "fhead";
+    head.innerHTML = `<span class="swatch" style="color:${f.color};background:${f.color}"></span><span class="fname">${escapeHtml(f.name)}</span>`;
+    if (CONFIG.fighters.length > 2) {       // keep at least two for a fight
+      const rm = document.createElement("button");
+      rm.className = "rm-fighter";
+      rm.textContent = "✕";
+      rm.title = "Remove this fighter";
+      rm.addEventListener("click", () => removeFighter(i));
+      head.appendChild(rm);
+    }
+    card.appendChild(head);
     grid.appendChild(card);
 
     // name
@@ -1278,12 +1317,47 @@ function checkbox(parent, label, get, set) {
 }
 
 function refreshSwatches() {
-  // cheap: rebuild fighter headers' swatches + readout reflect new names/colors live
-  document.querySelectorAll(".fighter-card .fhead").forEach((h, i) => {
+  // update each card's swatch + name in place (don't clobber the remove button)
+  document.querySelectorAll(".fighter-card").forEach((card, i) => {
     const f = CONFIG.fighters[i];
     if (!f) return;
-    h.innerHTML = `<span class="swatch" style="color:${f.color};background:${f.color}"></span>${escapeHtml(f.name)}`;
+    const sw = card.querySelector(".swatch");
+    const nm = card.querySelector(".fname");
+    if (sw) { sw.style.color = f.color; sw.style.background = f.color; }
+    if (nm) nm.textContent = f.name;
   });
+}
+
+/* Add a fighter: distinct color, a fresh weapon, and a start point spread around
+   the arena. fighters is an array by design, so the sim, combat, body collisions
+   and last-standing win check all already handle N — this only edits CONFIG and
+   re-renders the panel. */
+function addFighter() {
+  if (CONFIG.fighters.length >= FIGHTER_MAX) return;
+  const i = CONFIG.fighters.length;
+  const angle = (i / FIGHTER_MAX) * Math.PI * 2;
+  CONFIG.fighters.push({
+    name: "Fighter " + (i + 1),
+    color: FIGHTER_COLORS[i % FIGHTER_COLORS.length],
+    start: { x: +(0.5 + Math.cos(angle) * 0.32).toFixed(2),
+             y: +(0.5 + Math.sin(angle) * 0.32).toFixed(2) },
+    velocity: { x: (i % 2 ? -1 : 1) * 4, y: (i % 2 ? -1 : 1) * 3 },
+    radius: 34,
+    weapon: {
+      type: FIGHTER_WEAPONS[i % FIGHTER_WEAPONS.length],
+      length: 70, width: 22, damage: 12, heal: 4, knockback: 5700,
+      motion: i % 2 ? "spin" : "flail", spinSpeed: 0.13
+    }
+  });
+  buildFighters();
+  resetMatch();
+}
+
+function removeFighter(i) {
+  if (CONFIG.fighters.length <= 2) return;   // a fight needs at least two
+  CONFIG.fighters.splice(i, 1);
+  buildFighters();
+  resetMatch();
 }
 
 function syncSeedField() {
