@@ -68,12 +68,13 @@
     flex-wrap: wrap;
   }
 
-  .arena-col { flex: 0 0 auto; }
+  .arena-col { flex: 0 1 auto; min-width: 0; max-width: 100%; }
 
   .canvas-frame {
     position: relative;
     padding: 10px;
     border-radius: 18px;
+    max-width: 100%;
     background: linear-gradient(160deg, rgba(110,168,255,0.10), rgba(255,110,199,0.06));
     border: 1px solid var(--panel-edge);
     box-shadow: 0 24px 60px rgba(0,0,0,0.55), inset 0 0 40px rgba(80,110,255,0.05);
@@ -81,6 +82,10 @@
   canvas#arena {
     display: block;
     border-radius: 12px;
+    /* internal resolution stays = CONFIG.arena; CSS scales it down to fit the
+       screen (phones) while preserving aspect ratio so nothing gets cut off. */
+    max-width: 100%;
+    height: auto;
     background: #04050c;
     box-shadow: 0 0 0 1px rgba(120,150,255,0.12);
   }
@@ -137,7 +142,8 @@
 
   /* ---- Editor panel ---- */
   .panel {
-    flex: 1 1 360px;
+    flex: 1 1 340px;
+    min-width: 0;
     max-width: 430px;
     background: var(--panel);
     border: 1px solid var(--panel-edge);
@@ -209,6 +215,16 @@
   .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 
   .fighters-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+  /* Phones: stack arena over a full-width panel, shrink chrome, no overflow. */
+  @media (max-width: 720px) {
+    .wrap { padding: 14px 12px 48px; }
+    header.title h1 { font-size: 22px; letter-spacing: 1px; }
+    header.title p { font-size: 11px; }
+    .stage { gap: 14px; }
+    .arena-col { width: 100%; }
+    .panel { flex: 1 1 100%; max-width: 100%; width: 100%; }
+  }
   @media (max-width: 520px) { .fighters-grid { grid-template-columns: 1fr; } }
   .fighter-card {
     border: 1px solid rgba(120,150,255,0.16);
@@ -318,14 +334,14 @@ const CONFIG = {
       start: { x: 0.30, y: 0.20 },
       velocity: { x: 4, y: 3 },
       radius: 34,
-      weapon: { type: "hammer", length: 70, width: 24, damage: 15, heal: 0,  knockback: 5700 }
+      weapon: { type: "hammer", length: 70, width: 24, damage: 15, heal: 0,  knockback: 5700, motion: "flail", spinSpeed: 0.12 }
     },
     {
       name: "Plant", color: "#33cc33",
       start: { x: 0.60, y: 0.70 },
       velocity: { x: -3, y: -4 },
       radius: 34,
-      weapon: { type: "blade", length: 70, width: 20, damage: 11, heal: 11, knockback: 5700 }
+      weapon: { type: "blade", length: 70, width: 20, damage: 11, heal: 11, knockback: 5700, motion: "spin", spinSpeed: 0.14 }
     }
   ]
 };
@@ -401,6 +417,7 @@ function initFighters() {
       // weapon tip — a tethered mass simulated with Verlet for flail motion
       wx: px, wy: py,
       wpx: px, wpy: py,
+      spin: ang,                       // weapon angle (used by "spin" motion mode)
       hitCooldown: [],                 // per-opponent contact latch
       flash: 0,                        // white hit-flash timer
       trail: [],
@@ -509,26 +526,36 @@ function stepFighter(rf) {
   if (rf.y < top)    { rf.y = top;    rf.vy = Math.abs(rf.vy) * A.restitution; }
   if (rf.y > bottom) { rf.y = bottom; rf.vy = -Math.abs(rf.vy) * A.restitution; }
 
-  // 4. weapon tip trails the circle: a tethered Verlet mass anchored at center,
-  //    biased outward along velocity so it swings/flails as the body moves & bounces.
+  // 4. weapon tip. Two motion modes (per-weapon toggle):
+  //    "flail" — a tethered Verlet mass that trails/swings as the body moves & bounces.
+  //    "spin"  — rotates around the body at a constant angular speed.
   const len = fc.weapon.length + r;
-  // Verlet inertia
-  const nx = rf.wx + (rf.wx - rf.wpx) * 0.86;
-  const ny = rf.wy + (rf.wy - rf.wpy) * 0.86;
-  rf.wpx = rf.wx; rf.wpy = rf.wy;
-  rf.wx = nx; rf.wy = ny;
-  // a gentle pull toward the "lead" point ahead of the body keeps it swinging
-  const sp = Math.hypot(rf.vx, rf.vy);
-  if (sp > 0.01) {
-    const lead = 0.18;
-    rf.wx += (rf.vx / sp) * len * lead * 0.12;
-    rf.wy += (rf.vy / sp) * len * lead * 0.12;
+  if (fc.weapon.motion === "spin") {
+    rf.spin += (fc.weapon.spinSpeed || 0.12);
+    rf.wpx = rf.wx; rf.wpy = rf.wy;            // keep prev synced so toggling back to flail won't jolt
+    rf.wx = rf.x + Math.cos(rf.spin) * len;
+    rf.wy = rf.y + Math.sin(rf.spin) * len;
+  } else {
+    // Verlet inertia
+    const nx = rf.wx + (rf.wx - rf.wpx) * 0.86;
+    const ny = rf.wy + (rf.wy - rf.wpy) * 0.86;
+    rf.wpx = rf.wx; rf.wpy = rf.wy;
+    rf.wx = nx; rf.wy = ny;
+    // a gentle pull toward the "lead" point ahead of the body keeps it swinging
+    const sp = Math.hypot(rf.vx, rf.vy);
+    if (sp > 0.01) {
+      const lead = 0.18;
+      rf.wx += (rf.vx / sp) * len * lead * 0.12;
+      rf.wy += (rf.vy / sp) * len * lead * 0.12;
+    }
+    // distance constraint to anchor (the circle center)
+    let dx = rf.wx - rf.x, dy = rf.wy - rf.y;
+    let d = Math.hypot(dx, dy) || 0.0001;
+    rf.wx = rf.x + (dx / d) * len;
+    rf.wy = rf.y + (dy / d) * len;
+    // keep spin angle tracking the tether so a later switch to "spin" is seamless
+    rf.spin = Math.atan2(rf.wy - rf.y, rf.wx - rf.x);
   }
-  // distance constraint to anchor (the circle center)
-  let dx = rf.wx - rf.x, dy = rf.wy - rf.y;
-  let d = Math.hypot(dx, dy) || 0.0001;
-  rf.wx = rf.x + (dx / d) * len;
-  rf.wy = rf.y + (dy / d) * len;
 
   // trail history for the glow streak
   rf.trail.push({ x: rf.x, y: rf.y });
@@ -1149,6 +1176,21 @@ function buildFighters() {
       sel.addEventListener("change", () => f.weapon.type = sel.value);
       return sel;
     });
+
+    // weapon motion mode: follow direction (flail) vs constant spin
+    field(card, "Weapon motion", () => {
+      const sel = document.createElement("select");
+      [["flail", "Flail (follow direction)"], ["spin", "Spin (constant)"]].forEach(([v, label]) => {
+        const o = document.createElement("option");
+        o.value = v; o.textContent = label;
+        if ((f.weapon.motion || "flail") === v) o.selected = true;
+        sel.appendChild(o);
+      });
+      sel.addEventListener("change", () => f.weapon.motion = sel.value);
+      return sel;
+    });
+    slider(card, { label: "Spin speed", min: 0, max: 0.5, step: 0.01,
+      get: () => f.weapon.spinSpeed ?? 0.12, set: v => f.weapon.spinSpeed = v, fmt: v => v.toFixed(2) });
 
     // weapon stats (live)
     slider(card, { label: "Damage", min: 0, max: 60, step: 1,
