@@ -20,6 +20,10 @@
 
   * { box-sizing: border-box; }
 
+  /* Always reserve the vertical scrollbar so its width can't toggle frame-to-frame
+     (a toggling scrollbar rescales the max-width canvas and makes the page shake). */
+  html { overflow-y: scroll; scrollbar-gutter: stable; }
+
   html, body {
     margin: 0;
     padding: 0;
@@ -1323,8 +1327,16 @@ function loop(now) {
 /* ---------------------------------------------------------------------------
    Stat readout (HTML under the canvas)
    --------------------------------------------------------------------------- */
+let _readoutLast = 0;
+let _readoutCache = "";
 function updateReadout() {
-  const el = document.getElementById("readout");
+  // Throttle to ~10 Hz and only touch the DOM when the text actually changed.
+  // Rebuilding this every animation frame (with values that change every frame)
+  // thrashes layout and makes the panel jitter — a stat readout doesn't need 120 Hz.
+  const now = performance.now();
+  if (now - _readoutLast < 100) return;
+  _readoutLast = now;
+
   let html = "";
   state.fighters.forEach((rf) => {
     const fc = CONFIG.fighters[rf.cfg];
@@ -1339,13 +1351,16 @@ function updateReadout() {
         <h3><span class="swatch" style="color:${fc.color};background:${fc.color}"></span>${escapeHtml(fc.name)} ${rf.alive ? status : "💀"}</h3>
         <div class="stat-row"><span>HP</span><b>${Math.ceil(rf.hp)} / ${CONFIG.match.startHP}</b></div>
         <div class="stat-row"><span>Weapon</span><b>${(WEAPONS[fc.weapon.type]||{}).label||fc.weapon.type}</b></div>
-        <div class="stat-row"><span>Total damage</span><b>${rf.totalDamage}</b></div>
+        <div class="stat-row"><span>Total damage</span><b>${Math.round(rf.totalDamage)}</b></div>
         <div class="stat-row"><span>Hits landed</span><b>${rf.hitsLanded}</b></div>
         <div class="stat-row"><span>Total knockback</span><b>${Math.round(rf.totalKnockback)}</b></div>
         <div class="stat-row"><span>Speed</span><b>${Math.hypot(rf.vx, rf.vy).toFixed(1)}</b></div>
       </div>`;
   });
-  el.innerHTML = html;
+  if (html !== _readoutCache) {
+    _readoutCache = html;
+    document.getElementById("readout").innerHTML = html;
+  }
 }
 
 /* ===========================================================================
