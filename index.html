@@ -309,6 +309,16 @@
       </details>
 
       <details class="group">
+        <summary>Obstacles</summary>
+        <div class="group-body" id="grpObstacles"></div>
+      </details>
+
+      <details class="group">
+        <summary>Pickups / Power-ups</summary>
+        <div class="group-body" id="grpPickups"></div>
+      </details>
+
+      <details class="group">
         <summary>Save / Load (Export · Import JSON)</summary>
         <div class="group-body">
           <p class="hint">Export dumps the current CONFIG. Paste a CONFIG back and Import to load a matchup. (No browser storage — this is the save mechanism.)</p>
@@ -343,6 +353,20 @@ const CONFIG = {
     lastSeed: null     // the seed actually used; written back so good random runs are recoverable
   },
   display: { showNames: true, showSeed: true },   // overlay toggles (cosmetic)
+  // Master on/off switches for the board additions.
+  features: { obstacles: true, pickups: true },
+  // Board obstacles — a second entity type. Positions are arena fractions (0–1);
+  // sizes are px. type: wall (rect barrier) | bumper (bouncy circle) | hazard (damages).
+  obstacles: [
+    { type: "bumper", x: 0.50, y: 0.50, r: 38 },
+    { type: "hazard", x: 0.18, y: 0.82, r: 26, dps: 14 },
+    { type: "hazard", x: 0.82, y: 0.18, r: 26, dps: 14 }
+  ],
+  // Mid-arena pickups. Spawn timing/position/type are seeded (deterministic).
+  pickups: {
+    interval: 360, maxActive: 2, duration: 360,
+    boost: 2.0, shieldFactor: 0.4, speedFactor: 1.6
+  },
   fighters: [
     {
       name: "Light", color: "#f5d020",
@@ -372,6 +396,12 @@ const WEAPONS = {
   spike:  { label: "Spike",                 shape: "spike",  kind: "melee" },
   flail:  { label: "Flail",                 shape: "ball",   kind: "melee" },
   axe:    { label: "Axe",                   shape: "axe",    kind: "melee" },
+  // asymmetric melee archetypes: selecting one loads its `defaults` (a distinct
+  // attack pattern, not just different numbers).
+  dagger: { label: "Dagger (fast jabber)",  shape: "spike",  kind: "melee",
+            defaults: { motion: "thrust", damage: 6,  heal: 0, knockback: 2600, length: 50, width: 16, spinSpeed: 0.55 } },
+  maul:   { label: "Maul (slow heavy)",     shape: "hammer", kind: "melee",
+            defaults: { motion: "spin",   damage: 27, heal: 0, knockback: 11500, length: 96, width: 36, spinSpeed: 0.05 } },
   bow:    { label: "Bow (ranged)",          shape: "bow",    kind: "ranged", effect: "none",   proj: "arrow" },
   frost:  { label: "Frost Staff (freeze)",  shape: "staff",  kind: "ranged", effect: "freeze", proj: "frost" },
   fire:   { label: "Fire Staff (burn)",     shape: "staff",  kind: "ranged", effect: "burn",   proj: "fire"  },
@@ -415,6 +445,8 @@ let state = {
   particles: [],
   projectiles: [],  // ranged weapon shots
   zones: [],        // area effects (poison pools, fire patches)
+  pickups: [],      // active power-ups on the board
+  nextPickup: 0,    // frame of the next pickup spawn
   floaters: []      // floating damage numbers
 };
 
@@ -450,12 +482,15 @@ function initFighters() {
       prevX: px, prevY: py,            // render-interpolation snapshots (last sim state)
       prevWX: px, prevWY: py,
       spin: ang,                       // weapon angle (used by "spin" motion mode)
+      thrustPhase: 0,                  // jabber in/out oscillation phase
       aim: ang,                        // aim angle (used by ranged/aura weapons)
       hitCooldown: [],                 // per-opponent contact latch
       fireCd: Math.floor(rand(10, 45)),// staggered first shot so they don't all fire frame 1
       slowTimer: 0, slowFactor: 1,     // freeze / slow CC
       burnTimer: 0, burnDps: 0, burnOwner: null, // burn DoT
       poisonGlow: 0,                   // cosmetic tint while standing in poison
+      buffDamage: 0, buffShield: 0, buffSpeed: 0, // pickup power-up timers
+      hazardCd: false,                 // latch so a hazard ring tick reads cleanly
       flash: 0,                        // white hit-flash timer
       trail: [],
       totalDamage: 0,
@@ -491,6 +526,8 @@ function startMatch() {
     state.particles = [];
     state.projectiles = [];
     state.zones = [];
+    state.pickups = [];
+    state.nextPickup = CONFIG.pickups.interval;
     state.floaters = [];
     initFighters();
   }
@@ -507,6 +544,8 @@ function resetMatch() {
   state.particles = [];
   state.projectiles = [];
   state.zones = [];
+  state.pickups = [];
+  state.nextPickup = CONFIG.pickups.interval;
   state.floaters = [];
   initFighters();
   updateButtons();
@@ -547,29 +586,33 @@ function stepFighter(rf) {
 
   // 2. friction + speed clamp, then a minimum-speed floor so the fight never
   //    stalls (the reference circles never coast to a stop — they cruise & clash).
+  //    A speed pickup raises both the cap and the floor while active.
+  const speedMul = rf.buffSpeed > 0 ? CONFIG.pickups.speedFactor : 1;
+  const maxS = P.maxSpeed * speedMul, minS = P.minSpeed * speedMul;
   rf.vx *= P.friction;
   rf.vy *= P.friction;
-  clampSpeed(rf, P.maxSpeed);
+  clampSpeed(rf, maxS);
   // freeze / slow CC overrides the min-speed floor so a frozen fighter actually stalls
   let frozen = false;
   if (rf.slowTimer > 0) { rf.vx *= rf.slowFactor; rf.vy *= rf.slowFactor; rf.slowTimer--; frozen = true; }
-  if (!frozen && P.minSpeed > 0) {
+  if (!frozen && minS > 0) {
     let sp = Math.hypot(rf.vx, rf.vy);
-    if (sp < P.minSpeed) {
+    if (sp < minS) {
       if (sp < 0.001) { rf.vx = rand(-1, 1); rf.vy = rand(-1, 1); } // seeded nudge if dead-stopped
       sp = Math.hypot(rf.vx, rf.vy) || 1;
-      rf.vx = (rf.vx / sp) * P.minSpeed;
-      rf.vy = (rf.vy / sp) * P.minSpeed;
+      rf.vx = (rf.vx / sp) * minS;
+      rf.vy = (rf.vy / sp) * minS;
     }
   }
 
-  // 3. wall reflection with restitution
+  // 3. wall reflection with restitution + board obstacle collisions
   const left = wall + r, right = A.width - wall - r;
   const top = wall + r, bottom = A.height - wall - r;
   if (rf.x < left)  { rf.x = left;  rf.vx = Math.abs(rf.vx) * A.restitution; }
   if (rf.x > right) { rf.x = right; rf.vx = -Math.abs(rf.vx) * A.restitution; }
   if (rf.y < top)    { rf.y = top;    rf.vy = Math.abs(rf.vy) * A.restitution; }
   if (rf.y > bottom) { rf.y = bottom; rf.vy = -Math.abs(rf.vy) * A.restitution; }
+  if (CONFIG.features.obstacles) collideObstacles(rf, r);
 
   // 4. weapon tip. Melee weapons swing ("flail"/"spin"); ranged & aura weapons
   //    instead aim the held weapon toward the nearest enemy.
@@ -585,6 +628,16 @@ function stepFighter(rf) {
     rf.wpx = rf.wx; rf.wpy = rf.wy;            // keep prev synced so toggling back to flail won't jolt
     rf.wx = rf.x + Math.cos(rf.spin) * len;
     rf.wy = rf.y + Math.sin(rf.spin) * len;
+  } else if (fc.weapon.motion === "thrust") {
+    // jabber: aim at nearest enemy and stab in/out rapidly (multi-hit because the
+    // tip retracts past the contact range, re-arming the per-contact latch).
+    const tgt = nearestEnemy(rf);
+    if (tgt) rf.aim = Math.atan2(tgt.y - rf.y, tgt.x - rf.x);
+    rf.thrustPhase += (fc.weapon.spinSpeed || 0.5);
+    const reach = len * (0.45 + 0.55 * (0.5 + 0.5 * Math.sin(rf.thrustPhase)));
+    rf.wpx = rf.wx; rf.wpy = rf.wy;
+    rf.wx = rf.x + Math.cos(rf.aim) * reach;
+    rf.wy = rf.y + Math.sin(rf.aim) * reach;
   } else {
     // Verlet inertia
     const nx = rf.wx + (rf.wx - rf.wpx) * 0.86;
@@ -610,6 +663,11 @@ function stepFighter(rf) {
   // burn damage-over-time (from a fire staff hit)
   if (rf.burnTimer > 0) { dealDamage(rf.burnOwner, rf, rf.burnDps / 60); rf.burnTimer--; }
   if (rf.poisonGlow > 0) rf.poisonGlow--;
+
+  // power-up timers
+  if (rf.buffDamage > 0) rf.buffDamage--;
+  if (rf.buffShield > 0) rf.buffShield--;
+  if (rf.buffSpeed > 0) rf.buffSpeed--;
 
   // trail history for the glow streak
   rf.trail.push({ x: rf.x, y: rf.y });
@@ -689,15 +747,16 @@ function handleCombat() {
   }
 }
 
-/* Central HP subtraction + death check. attacker may be null (e.g. untracked DoT). */
+/* Central HP subtraction + death check. attacker may be null (e.g. untracked DoT).
+   Applies pickup buffs: attacker's damage boost and target's shield. hitsLanded is
+   counted by discrete-hit callers (not here) so continuous DoT doesn't inflate it. */
 function dealDamage(attacker, target, amount) {
   if (!target.alive || amount <= 0) return;
+  if (attacker && attacker.buffDamage > 0) amount *= CONFIG.pickups.boost;
+  if (target.buffShield > 0) amount *= CONFIG.pickups.shieldFactor;
   target.hp -= amount;
   target.flash = Math.max(target.flash, 6);
-  if (attacker) {
-    attacker.totalDamage += amount;
-    attacker.hitsLanded++;
-  }
+  if (attacker) attacker.totalDamage += amount;
   if (CONFIG.match.winOnZero && target.hp <= 0) {
     target.hp = 0;
     target.alive = false;
@@ -708,6 +767,7 @@ function dealDamage(attacker, target, amount) {
 function applyHit(atk, def, w, dx, dy, dist) {
   const P = CONFIG.physics;
   dealDamage(atk, def, w.damage);
+  atk.hitsLanded++;
 
   // self-heal, capped at startHP
   if (w.heal) {
@@ -821,6 +881,7 @@ function updateProjectiles() {
         const tr = CONFIG.fighters[t.cfg].radius;
         if ((t.x - p.x) ** 2 + (t.y - p.y) ** 2 <= (tr + p.radius) ** 2) {
           dealDamage(p.owner, t, p.damage);
+          p.owner.hitsLanded++;
           const d = Math.hypot(p.vx, p.vy) || 1;
           const kb = p.knockback * P.knockbackScale * (1 / 60);
           t.vx += (p.vx / d) * kb; t.vy += (p.vy / d) * kb;
@@ -882,6 +943,102 @@ function updateZones() {
 }
 
 /* ---------------------------------------------------------------------------
+   Board obstacles (second entity type) + pickups / power-ups
+   --------------------------------------------------------------------------- */
+const PICKUP_TYPES = ["damage", "shield", "speed"];
+const PICKUP_COLOR = { damage: "#ff5d6c", shield: "#6ea8ff", speed: "#46e6a0" };
+const PICKUP_GLYPH = { damage: "⚔", shield: "🛡", speed: "⚡" };
+
+// obstacle geometry in pixels (positions stored as arena fractions)
+function obstacleRect(o, A) {
+  const w = o.w * A.width, h = o.h * A.height;
+  return { x: o.x * A.width, y: o.y * A.height, w, h };
+}
+function obstacleCircle(o, A) {
+  return { x: o.x * A.width, y: o.y * A.height, r: o.r };
+}
+
+function collideObstacles(rf, r) {
+  const A = CONFIG.arena;
+  for (const o of CONFIG.obstacles) {
+    if (o.type === "wall") {
+      // circle vs AABB: push out along the shallowest axis and reflect
+      const R = obstacleRect(o, A);
+      const cx = Math.max(R.x, Math.min(rf.x, R.x + R.w));
+      const cy = Math.max(R.y, Math.min(rf.y, R.y + R.h));
+      let dx = rf.x - cx, dy = rf.y - cy;
+      let d = Math.hypot(dx, dy);
+      if (d < r) {
+        if (d < 0.0001) { dx = rf.x - (R.x + R.w / 2); dy = rf.y - (R.y + R.h / 2); d = Math.hypot(dx, dy) || 1; }
+        const nx = dx / d, ny = dy / d;
+        rf.x = cx + nx * r; rf.y = cy + ny * r;
+        const vn = rf.vx * nx + rf.vy * ny;
+        if (vn < 0) { rf.vx -= (1 + A.restitution) * vn * nx; rf.vy -= (1 + A.restitution) * vn * ny; }
+      }
+    } else {
+      const C = obstacleCircle(o, A);
+      let dx = rf.x - C.x, dy = rf.y - C.y;
+      let d = Math.hypot(dx, dy);
+      const minD = r + C.r;
+      if (d < minD) {
+        if (d < 0.0001) { dx = 1; dy = 0; d = 1; }
+        const nx = dx / d, ny = dy / d;
+        rf.x = C.x + nx * minD; rf.y = C.y + ny * minD;
+        const vn = rf.vx * nx + rf.vy * ny;
+        if (vn < 0) {
+          rf.vx -= (1 + A.restitution) * vn * nx; rf.vy -= (1 + A.restitution) * vn * ny;
+          if (o.type === "bumper") {                 // bumpers add a springy kick
+            const boost = (o.boost != null ? o.boost : 3.5);
+            rf.vx += nx * boost; rf.vy += ny * boost;
+            state.shake = Math.min(10, state.shake + 3);
+            spawnBurst(C.x + nx * C.r, C.y + ny * C.r, "#9fd0ff");
+          }
+        }
+        if (o.type === "hazard") dealDamage(null, rf, (o.dps != null ? o.dps : 12) / 60);
+      }
+    }
+  }
+}
+
+/* Pickups spawn on a seeded cadence and grant a timed buff on pickup. */
+function updatePickups() {
+  if (!CONFIG.features.pickups) return;
+  const A = CONFIG.arena, cfg = CONFIG.pickups;
+  // spawn
+  if (state.frame >= state.nextPickup && state.pickups.length < cfg.maxActive) {
+    const type = PICKUP_TYPES[Math.floor(rand(0, PICKUP_TYPES.length)) % PICKUP_TYPES.length];
+    state.pickups.push({
+      type,
+      x: rand(A.width * 0.15, A.width * 0.85),
+      y: rand(A.height * 0.15, A.height * 0.85),
+      r: 16,
+      bob: rand(0, Math.PI * 2)
+    });
+    state.nextPickup = state.frame + cfg.interval;
+  }
+  // collection
+  const keep = [];
+  for (const pk of state.pickups) {
+    let taken = false;
+    for (const rf of state.fighters) {
+      if (!rf.alive) continue;
+      const rr = CONFIG.fighters[rf.cfg].radius;
+      if ((rf.x - pk.x) ** 2 + (rf.y - pk.y) ** 2 <= (rr + pk.r) ** 2) {
+        if (pk.type === "damage") rf.buffDamage = cfg.duration;
+        else if (pk.type === "shield") rf.buffShield = cfg.duration;
+        else rf.buffSpeed = cfg.duration;
+        spawnFloater(rf.x, rf.y - rr - 14, PICKUP_GLYPH[pk.type] + " " + pk.type.toUpperCase(), PICKUP_COLOR[pk.type]);
+        for (let k = 0; k < 14; k++) spawnBurst(pk.x, pk.y, PICKUP_COLOR[pk.type]);
+        taken = true;
+        break;
+      }
+    }
+    if (!taken) keep.push(pk);
+  }
+  state.pickups = keep;
+}
+
+/* ---------------------------------------------------------------------------
    Particles & floating numbers (purely cosmetic juice)
    --------------------------------------------------------------------------- */
 function spawnBurst(x, y, color, big) {
@@ -939,6 +1096,8 @@ function drawFrame(alpha) {
   drawWalls(A);
 
   drawZones();   // ground effects sit under the fighters
+  if (CONFIG.features.obstacles) drawObstacles(A);
+  if (CONFIG.features.pickups) drawPickups();
   // trails first (under everything)
   for (const rf of state.fighters) drawTrail(rf);
   for (const rf of state.fighters) drawWeapon(rf);
@@ -1112,6 +1271,17 @@ function drawCircle(rf) {
     ctx.beginPath(); ctx.arc(cx, cy, r + 4, 0, Math.PI * 2); ctx.stroke();
     ctx.shadowBlur = 0;
   }
+  // power-up auras: dashed rings outside the body (damage/shield/speed)
+  let aura = r + 9;
+  const dash = (color) => {
+    ctx.setLineDash([6, 6]); ctx.lineDashOffset = -state.frame * 0.6;
+    ctx.lineWidth = 2.5; ctx.strokeStyle = color; ctx.shadowColor = color; ctx.shadowBlur = 10;
+    ctx.beginPath(); ctx.arc(cx, cy, aura, 0, Math.PI * 2); ctx.stroke();
+    ctx.setLineDash([]); ctx.shadowBlur = 0; aura += 6;
+  };
+  if (rf.buffDamage > 0) dash(PICKUP_COLOR.damage);
+  if (rf.buffShield > 0) dash(PICKUP_COLOR.shield);
+  if (rf.buffSpeed > 0) dash(PICKUP_COLOR.speed);
   ctx.restore();
 
   // HP bar above the circle
@@ -1154,6 +1324,67 @@ function drawHPBar(rf, fc, r) {
   ctx.fillStyle = "rgba(255,210,120,0.95)";
   ctx.font = "600 10px Segoe UI, sans-serif";
   ctx.fillText(`⚔ ${fc.weapon.damage}`, rf.dx, by + bh + 12);
+}
+
+function drawObstacles(A) {
+  for (const o of CONFIG.obstacles) {
+    if (o.type === "wall") {
+      const R = obstacleRect(o, A);
+      ctx.save();
+      ctx.fillStyle = "rgba(150,170,220,0.18)";
+      ctx.strokeStyle = "rgba(170,190,255,0.7)";
+      ctx.lineWidth = 2; ctx.shadowColor = "rgba(150,180,255,0.5)"; ctx.shadowBlur = 10;
+      roundRect(R.x, R.y, R.w, R.h, 6); ctx.fill(); ctx.stroke();
+      ctx.restore();
+    } else {
+      const C = obstacleCircle(o, A);
+      const pulse = 0.5 + 0.5 * Math.sin(state.frame * 0.1);
+      ctx.save();
+      if (o.type === "bumper") {
+        ctx.fillStyle = "rgba(110,170,255,0.25)";
+        ctx.strokeStyle = "rgba(150,200,255,0.95)";
+        ctx.shadowColor = "rgba(120,180,255,0.8)";
+      } else { // hazard
+        ctx.fillStyle = `rgba(255,80,90,${0.18 + 0.14 * pulse})`;
+        ctx.strokeStyle = "rgba(255,110,120,0.95)";
+        ctx.shadowColor = "rgba(255,80,90,0.8)";
+      }
+      ctx.lineWidth = 3; ctx.shadowBlur = 14;
+      ctx.beginPath(); ctx.arc(C.x, C.y, C.r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      if (o.type === "hazard") {  // spiky inner ring
+        ctx.shadowBlur = 0; ctx.strokeStyle = "rgba(255,150,150,0.8)"; ctx.lineWidth = 2;
+        ctx.beginPath();
+        for (let k = 0; k < 12; k++) {
+          const a = (k / 12) * Math.PI * 2 + state.frame * 0.02;
+          const rr = C.r * (k % 2 ? 0.55 : 0.8);
+          const px = C.x + Math.cos(a) * rr, py = C.y + Math.sin(a) * rr;
+          k ? ctx.lineTo(px, py) : ctx.moveTo(px, py);
+        }
+        ctx.closePath(); ctx.stroke();
+      }
+      ctx.restore();
+    }
+  }
+}
+
+function drawPickups() {
+  for (const pk of state.pickups) {
+    const yo = Math.sin(state.frame * 0.08 + pk.bob) * 4;   // gentle bob
+    const col = PICKUP_COLOR[pk.type];
+    ctx.save();
+    ctx.translate(pk.x, pk.y + yo);
+    ctx.shadowColor = col; ctx.shadowBlur = 16;
+    ctx.fillStyle = "rgba(10,14,30,0.85)";
+    ctx.strokeStyle = col; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(0, 0, pk.r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = col;
+    ctx.font = "700 16px Segoe UI, sans-serif";
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText(PICKUP_GLYPH[pk.type], 0, 1);
+    ctx.restore();
+  }
+  ctx.textBaseline = "alphabetic";
 }
 
 function drawZones() {
@@ -1315,6 +1546,7 @@ function loop(now) {
       fireWeapons();
       updateProjectiles();
       updateZones();
+      updatePickups();
       _acc -= SIM_STEP_MS;
       if (!state.running) break;   // a KO this step ends the match; don't over-step
     }
@@ -1345,6 +1577,9 @@ function updateReadout() {
       if (rf.slowTimer > 0) status += " ❄";
       if (rf.burnTimer > 0) status += " 🔥";
       if (rf.poisonGlow > 0) status += " ☠";
+      if (rf.buffDamage > 0) status += " ⚔";
+      if (rf.buffShield > 0) status += " 🛡";
+      if (rf.buffSpeed > 0) status += " ⚡";
     }
     html += `
       <div class="stat-card">
@@ -1372,6 +1607,8 @@ function buildEditor() {
   buildPhysics();
   buildMatch();
   buildFighters();
+  buildObstacles();
+  buildPickups();
 }
 
 /* generic slider field */
@@ -1465,7 +1702,7 @@ function buildMatch() {
 
 const FIGHTER_MAX = 8;
 const FIGHTER_COLORS = ["#f5d020", "#33cc33", "#ff6ec7", "#6ea8ff", "#ff7043", "#b388ff", "#26c6da", "#ff5d6c"];
-const FIGHTER_WEAPONS = ["hammer", "blade", "bow", "frost", "fire", "poison", "spike", "axe"];
+const FIGHTER_WEAPONS = ["hammer", "blade", "dagger", "bow", "frost", "fire", "poison", "maul"];
 
 function buildFighters() {
   // Add-fighter control + live count (free-for-all: last circle standing wins)
@@ -1543,7 +1780,13 @@ function buildFighters() {
         if (f.weapon.type === k) o.selected = true;
         sel.appendChild(o);
       });
-      sel.addEventListener("change", () => { f.weapon.type = sel.value; buildFighters(); });
+      sel.addEventListener("change", () => {
+        f.weapon.type = sel.value;
+        // archetypes (dagger/maul) load their distinct pattern + stat profile
+        const d = (WEAPONS[sel.value] || {}).defaults;
+        if (d) Object.assign(f.weapon, d);
+        buildFighters();
+      });
       return sel;
     });
 
@@ -1558,7 +1801,7 @@ function buildFighters() {
     if (kind === "melee") {
       field(card, "Weapon motion", () => {
         const sel = document.createElement("select");
-        [["flail", "Flail (follow direction)"], ["spin", "Spin (constant)"]].forEach(([v, label]) => {
+        [["flail", "Flail (follow direction)"], ["spin", "Spin (constant)"], ["thrust", "Thrust (jab at enemy)"]].forEach(([v, label]) => {
           const o = document.createElement("option");
           o.value = v; o.textContent = label;
           if ((w.motion || "flail") === v) o.selected = true;
@@ -1567,7 +1810,7 @@ function buildFighters() {
         sel.addEventListener("change", () => w.motion = sel.value);
         return sel;
       });
-      slider(card, { label: "Spin speed", min: 0, max: 0.5, step: 0.01,
+      slider(card, { label: w.motion === "thrust" ? "Jab speed" : "Spin speed", min: 0, max: 0.7, step: 0.01,
         get: () => w.spinSpeed ?? 0.12, set: v => w.spinSpeed = v, fmt: v => v.toFixed(2) });
       slider(card, { label: "Heal on hit", min: 0, max: 40, step: 1,
         get: () => w.heal, set: v => w.heal = v });
@@ -1648,6 +1891,15 @@ function addFighter() {
   if (CONFIG.fighters.length >= FIGHTER_MAX) return;
   const i = CONFIG.fighters.length;
   const angle = (i / FIGHTER_MAX) * Math.PI * 2;
+  const type = FIGHTER_WEAPONS[i % FIGHTER_WEAPONS.length];
+  const weapon = {
+    type,
+    length: 70, width: 22, damage: 12, heal: 4, knockback: 5700,
+    motion: i % 2 ? "spin" : "flail", spinSpeed: 0.13,
+    fireRate: WDEF.fireRate, projectileSpeed: WDEF.projectileSpeed,
+    effectPower: WDEF.effectPower, effectDuration: WDEF.effectDuration, zoneRadius: WDEF.zoneRadius
+  };
+  if (WEAPONS[type].defaults) Object.assign(weapon, WEAPONS[type].defaults);  // load archetype profile
   CONFIG.fighters.push({
     name: "Fighter " + (i + 1),
     color: FIGHTER_COLORS[i % FIGHTER_COLORS.length],
@@ -1655,13 +1907,7 @@ function addFighter() {
              y: +(0.5 + Math.sin(angle) * 0.32).toFixed(2) },
     velocity: { x: (i % 2 ? -1 : 1) * 4, y: (i % 2 ? -1 : 1) * 3 },
     radius: 34,
-    weapon: {
-      type: FIGHTER_WEAPONS[i % FIGHTER_WEAPONS.length],
-      length: 70, width: 22, damage: 12, heal: 4, knockback: 5700,
-      motion: i % 2 ? "spin" : "flail", spinSpeed: 0.13,
-      fireRate: WDEF.fireRate, projectileSpeed: WDEF.projectileSpeed,
-      effectPower: WDEF.effectPower, effectDuration: WDEF.effectDuration, zoneRadius: WDEF.zoneRadius
-    }
+    weapon
   });
   buildFighters();
   resetMatch();
@@ -1672,6 +1918,75 @@ function removeFighter(i) {
   CONFIG.fighters.splice(i, 1);
   buildFighters();
   resetMatch();
+}
+
+/* ---- Obstacles editor ---- */
+function buildObstacles() {
+  const p = document.getElementById("grpObstacles");
+  p.innerHTML = "";
+  checkbox(p, "Enable obstacles", () => CONFIG.features.obstacles, v => CONFIG.features.obstacles = v);
+
+  const bar = document.createElement("div");
+  bar.className = "fighter-controls";
+  [["wall", "＋ Wall"], ["bumper", "＋ Bumper"], ["hazard", "＋ Hazard"]].forEach(([t, label]) => {
+    const b = document.createElement("button"); b.className = "ghost"; b.textContent = label;
+    b.addEventListener("click", () => addObstacle(t));
+    bar.appendChild(b);
+  });
+  p.appendChild(bar);
+
+  CONFIG.obstacles.forEach((o, i) => {
+    const card = document.createElement("div");
+    card.className = "fighter-card";
+    const head = document.createElement("div");
+    head.className = "fhead";
+    head.innerHTML = `<span class="fname">${o.type[0].toUpperCase() + o.type.slice(1)} ${i + 1}</span>`;
+    const rm = document.createElement("button");
+    rm.className = "rm-fighter"; rm.textContent = "✕"; rm.title = "Remove";
+    rm.addEventListener("click", () => { CONFIG.obstacles.splice(i, 1); buildObstacles(); });
+    head.appendChild(rm); card.appendChild(head); p.appendChild(card);
+
+    const row = document.createElement("div"); row.className = "row2"; card.appendChild(row);
+    slider(row, { label: "X", min: 0.05, max: 0.95, step: 0.01, get: () => o.x, set: v => o.x = v, fmt: v => v.toFixed(2) });
+    slider(row, { label: "Y", min: 0.05, max: 0.95, step: 0.01, get: () => o.y, set: v => o.y = v, fmt: v => v.toFixed(2) });
+    if (o.type === "wall") {
+      const row2 = document.createElement("div"); row2.className = "row2"; card.appendChild(row2);
+      slider(row2, { label: "Width", min: 0.02, max: 0.6, step: 0.01, get: () => o.w, set: v => o.w = v, fmt: v => v.toFixed(2) });
+      slider(row2, { label: "Height", min: 0.02, max: 0.6, step: 0.01, get: () => o.h, set: v => o.h = v, fmt: v => v.toFixed(2) });
+    } else {
+      slider(card, { label: "Radius", min: 12, max: 90, step: 1, get: () => o.r, set: v => o.r = v, fmt: v => v + "px" });
+      if (o.type === "bumper")
+        slider(card, { label: "Bounce boost", min: 0, max: 10, step: 0.5, get: () => o.boost ?? 3.5, set: v => o.boost = v });
+      if (o.type === "hazard")
+        slider(card, { label: "Damage / sec", min: 1, max: 40, step: 1, get: () => o.dps ?? 12, set: v => o.dps = v });
+    }
+  });
+}
+
+function addObstacle(type) {
+  const o = { type, x: +rand(0.25, 0.75).toFixed(2), y: +rand(0.25, 0.75).toFixed(2) };
+  if (type === "wall") { o.w = 0.18; o.h = 0.05; }
+  else { o.r = type === "bumper" ? 36 : 26; if (type === "bumper") o.boost = 3.5; else o.dps = 12; }
+  CONFIG.obstacles.push(o);
+  buildObstacles();
+}
+
+/* ---- Pickups editor ---- */
+function buildPickups() {
+  const p = document.getElementById("grpPickups");
+  p.innerHTML = "";
+  checkbox(p, "Enable pickups", () => CONFIG.features.pickups, v => CONFIG.features.pickups = v);
+  const pk = CONFIG.pickups;
+  slider(p, { label: "Spawn interval (frames)", min: 60, max: 1200, step: 30, get: () => pk.interval, set: v => pk.interval = v });
+  slider(p, { label: "Max on board", min: 1, max: 5, step: 1, get: () => pk.maxActive, set: v => pk.maxActive = v });
+  slider(p, { label: "Buff duration (frames)", min: 60, max: 1200, step: 30, get: () => pk.duration, set: v => pk.duration = v });
+  slider(p, { label: "Damage boost ×", min: 1, max: 4, step: 0.25, get: () => pk.boost, set: v => pk.boost = v, fmt: v => v.toFixed(2) + "×" });
+  slider(p, { label: "Shield (dmg taken ×)", min: 0, max: 1, step: 0.05, get: () => pk.shieldFactor, set: v => pk.shieldFactor = v, fmt: v => v.toFixed(2) + "×" });
+  slider(p, { label: "Speed boost ×", min: 1, max: 3, step: 0.1, get: () => pk.speedFactor, set: v => pk.speedFactor = v, fmt: v => v.toFixed(1) + "×" });
+  const hint = document.createElement("p");
+  hint.className = "hint";
+  hint.textContent = "⚔ damage · 🛡 shield · ⚡ speed. Spawns are seeded, so a given seed always drops the same pickups at the same times.";
+  p.appendChild(hint);
 }
 
 function syncSeedField() {
@@ -1708,6 +2023,9 @@ function importConfig() {
   CONFIG.match = parsed.match;
   CONFIG.fighters = parsed.fighters;
   CONFIG.display = parsed.display || { showNames: true, showSeed: true };
+  CONFIG.features = parsed.features || { obstacles: true, pickups: true };
+  CONFIG.obstacles = Array.isArray(parsed.obstacles) ? parsed.obstacles : [];
+  CONFIG.pickups = parsed.pickups || { interval: 360, maxActive: 2, duration: 360, boost: 2.0, shieldFactor: 0.4, speedFactor: 1.6 };
   buildEditor();
   resetMatch();
   showIoMsg("Imported — matchup loaded and reset to frame 0.", true);
