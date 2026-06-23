@@ -10,9 +10,13 @@ fight. Pure vanilla JS + Canvas 2D, no build step, no dependencies, no backend.
 
 - **Physics arena** — circles slide, bounce off the walls *and each other*, and never
   stall (a minimum-speed floor keeps the action going, like the reference).
-- **Weapon motion toggle** — per fighter, each weapon either *follows the circle's
-  direction* (a Verlet-simulated tethered flail that swings as the body moves and
-  bounces) or *spins* at a constant, tunable angular speed.
+- **Weapon classes** — three behavior kinds, all editable per fighter:
+  - *Melee* (Hammer / Blade / Spike / Flail / Axe) — a tethered tip that either
+    follows the circle's direction (Verlet flail) or spins at a constant speed.
+  - *Ranged* — **Bow** fires arrows at the nearest enemy; **Frost Staff** fires bolts
+    that freeze/slow; **Fire Staff** fires fireballs that leave a burning patch + burn DoT.
+  - *Aura* — **Poison Censer** periodically drops poison pools that damage anyone inside.
+  - Crowd-control effects (freeze, burn, poison) are fully seeded/deterministic.
 - **2–8 fighters** — add or remove fighters from the editor for a free-for-all; the
   last circle standing wins. New fighters get a distinct color, weapon, and a start
   point spread around the arena.
