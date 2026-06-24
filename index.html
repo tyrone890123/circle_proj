@@ -580,12 +580,11 @@ function stepFighter(rf) {
   const wall = A.wallThickness;
   const r = fc.radius;
 
-  // 1. integrate position
-  rf.x += rf.vx;
-  rf.y += rf.vy;
-
-  // 2. friction + speed clamp, then a minimum-speed floor so the fight never
-  //    stalls (the reference circles never coast to a stop — they cruise & clash).
+  // 1. velocity update FIRST (friction, speed clamp, then a minimum-speed floor so
+  //    the fight never stalls). Doing this before moving is important: a knockback
+  //    impulse can set velocity far above maxSpeed, and if we integrated first the
+  //    body would jump ~100px in a single frame (a "teleport", especially into
+  //    obstacles). Clamping first bounds movement to maxSpeed/frame, so it slides.
   //    A speed pickup raises both the cap and the floor while active.
   const speedMul = rf.buffSpeed > 0 ? CONFIG.pickups.speedFactor : 1;
   const maxS = P.maxSpeed * speedMul, minS = P.minSpeed * speedMul;
@@ -604,6 +603,10 @@ function stepFighter(rf) {
       rf.vy = (rf.vy / sp) * minS;
     }
   }
+
+  // 2. integrate position (now bounded by maxSpeed per frame)
+  rf.x += rf.vx;
+  rf.y += rf.vy;
 
   // 3. wall reflection with restitution + board obstacle collisions
   const left = wall + r, right = A.width - wall - r;
